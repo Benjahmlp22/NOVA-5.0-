@@ -32,6 +32,7 @@ from .config import CONFIG
 from .core.agent import Agent
 from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
+from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
 from .tools import PendingConfirmation, build_registry
 from .ui import GlowBorder, Orb
@@ -48,6 +49,25 @@ DESPEDIDAS = ["Hasta luego.", "Aquí estaré.", "Vale."]
 # ruido alrededor ("si dale wacho") porque hablando nadie dice "sí" seco.
 _AFIRMA = ("si", "sí", "claro", "dale", "vale", "ok", "okey", "hazlo",
            "adelante", "venga", "confirmo", "correcto", "eso")
+
+
+def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
+    """¿Este texto va a producir audio de verdad?
+
+    Existe como función suelta para poder probarla sin montar Qt. La
+    tercera condición es la que faltaba en NOVA4: con `NOVA_TTS=false`,
+    `Speaker.say()` vuelve sin disparar `on_start`/`on_end`, así que nadie
+    movía el orbe nunca más y se quedaba clavado en "pensando" para
+    siempre. El bug no se veía porque casi nadie apaga la voz.
+    """
+    return hablar and not silenciada and tts_activo
+
+
+def estado_en_reposo(*, ocupada: bool, despierta: bool) -> str:
+    """Qué estado le toca al orbe cuando NOVA termina de hablar."""
+    if ocupada:
+        return "pensando"
+    return "escucha" if despierta else "dormida"
 
 
 class _Worker(QObject):
@@ -311,10 +331,36 @@ class Nova(QObject):
         estado: str = "",
         hablar: bool = True,
     ) -> None:
-        if hablar and not self._voz_silenciada:
-            self.speaker.say(texto)
-        elif estado:
+        """Dice algo en alto y deja el orbe en un estado coherente.
+
+        `texto` llega entero — es lo que se guarda y lo que verán los
+        subtítulos. Al TTS va recortado: el modelo se salta el "1 o 2
+        frases" del prompt y 200 caracteres son 12 s hablando con el
+        micrófono mudo (ver `polish.recortar_para_voz`).
+        """
+        if va_a_sonar(
+            hablar=hablar,
+            silenciada=self._voz_silenciada,
+            tts_activo=self.speaker.enabled,
+        ):
+            self.speaker.say(recortar_para_voz(texto))
+            return
+
+        # Si no va a sonar, nadie va a llamar a `_hablando_fin`: hay que
+        # cerrar el ciclo a mano o el orbe se queda como estuviera.
+        self._reposo(estado)
+
+    def _reposo(self, estado: str = "") -> None:
+        """Deja orbe y glow como toca cuando NOVA deja de hablar."""
+        if estado:
             self.orb.set_estado(estado)
+            return
+        siguiente = estado_en_reposo(ocupada=self._ocupada, despierta=self.listener.awake)
+        if siguiente == "escucha" and CONFIG.glow_enabled:
+            # La conversación sigue abierta: se nota en el glow que no
+            # hace falta repetir "NOVA" para el siguiente turno.
+            self.glow.encender()
+        self.orb.set_estado(siguiente)
 
     def _hablando_inicio(self) -> None:
         # Mientras NOVA habla, el micrófono se ignora: si no, se oye a sí
@@ -324,16 +370,7 @@ class Nova(QObject):
 
     def _hablando_fin(self) -> None:
         self.listener.unmute()
-        if self._ocupada:
-            self.orb.set_estado("pensando")
-        elif self.listener.awake:
-            # La conversación sigue abierta: se nota en el glow que no
-            # hace falta repetir "NOVA" para el siguiente turno.
-            if CONFIG.glow_enabled:
-                self.glow.encender()
-            self.orb.set_estado("escucha")
-        else:
-            self.orb.set_estado("dormida")
+        self._reposo()
 
 
 def run() -> int:
