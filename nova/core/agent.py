@@ -32,11 +32,18 @@ from .polish import pulir
 
 log = logging.getLogger("nova.agent")
 
-# Herramientas que existen pero NO se le ofrecen al modelo: o son de
-# depuración, o el usuario casi nunca las pide por voz, o (command.run)
-# tienen superficie de ejecución real y es mejor que no estén a un
-# token de distancia.
-LLM_HIDDEN = frozenset({"logs.read", "command.run", "process.kill"})
+# Herramientas que existen pero NO se le ofrecen al modelo.
+#
+# Está vacío a propósito y conviene que siga estándolo: para ocultarle
+# una herramienta al modelo, lo correcto es registrarla con
+# `expose_to_llm=False`, que deja la decisión junto a la herramienta en
+# vez de en una lista lejana que nadie actualiza.
+#
+# NOVA4 traía aquí {"logs.read", "command.run", "process.kill"} y ninguna
+# de las tres existía: se registraban 19 herramientas y se ofrecían las
+# 19. El código parecía estar protegiendo algo y no protegía nada, que es
+# peor que no tenerlo.
+LLM_HIDDEN: frozenset[str] = frozenset()
 
 # "recuerda que X", "apúntate que X", "no olvides que X" → guardar X.
 _RECUERDA = re.compile(

@@ -131,3 +131,69 @@ def test_memoria_olvida(memoria_temporal):
     mem.remember("mi color favorito es el azul")
     assert mem.forget("color").ok
     assert "no tengo" in mem.recall("color").message.lower()
+
+
+def test_lo_que_se_oculta_al_modelo_existe_de_verdad():
+    """Una lista de exclusión que nombra herramientas fantasma no protege nada.
+
+    NOVA4 ocultaba {"logs.read", "command.run", "process.kill"} y ninguna
+    existía: registraba 19 herramientas y ofrecía las 19. Parecía haber
+    un control que no había.
+    """
+    from nova.core.agent import LLM_HIDDEN
+
+    reg = build_registry()
+    fantasmas = {n for n in LLM_HIDDEN if reg.get(n) is None}
+    assert not fantasmas, f"se ocultan herramientas que no existen: {fantasmas}"
+
+
+def test_el_catalogo_del_modelo_sale_de_expose_to_llm():
+    """La decisión de ocultar vive junto a la herramienta, no en una lista."""
+    from nova.core.agent import LLM_HIDDEN
+
+    reg = build_registry()
+    esperadas = {
+        reg.get(n).llm_name
+        for n in reg.names()
+        if reg.get(n).expose_to_llm and n not in LLM_HIDDEN
+    }
+    ofrecidas = {e["function"]["name"] for e in reg.llm_schemas(exclude=set(LLM_HIDDEN))}
+    assert ofrecidas == esperadas
+
+
+# ── La memoria llega al prompt (en NOVA4 no llegaba) ─────────────────
+
+def test_memoria_para_prompt_lista_los_hechos(memoria_temporal):
+    from nova.tools import memory
+
+    memory.remember("me llamo Benja")
+    memory.remember("juego a Stormworks")
+    bloque = memory.para_prompt()
+    assert "- me llamo Benja" in bloque
+    assert "- juego a Stormworks" in bloque
+
+
+def test_memoria_para_prompt_vacia_no_ensucia_el_prompt(memoria_temporal):
+    """Sin recuerdos no se añade una sección vacía al system prompt."""
+    from nova.tools import memory
+
+    assert memory.para_prompt() == ""
+
+
+def test_memoria_para_prompt_tiene_techo(memoria_temporal):
+    """El prefill se paga en CADA mensaje: la lista no puede crecer sin fin."""
+    from nova.tools import memory
+
+    for i in range(20):
+        memory.remember(f"dato numero {i}")
+    lineas = memory.para_prompt().splitlines()
+    assert len(lineas) == memory.MAX_HECHOS_EN_PROMPT
+    # Se quedan los más recientes, no los primeros.
+    assert "dato numero 19" in lineas[-1]
+
+
+def test_el_prompt_incluye_los_recuerdos():
+    from nova.core.conversation import build_system_prompt
+
+    prompt = build_system_prompt("## Contexto actual\n- Ahora: lunes", "- odio el cilantro")
+    assert "odio el cilantro" in prompt

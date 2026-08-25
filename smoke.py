@@ -16,7 +16,7 @@ from nova.core.agent import Agent
 from nova.core.awareness import Awareness
 from nova.core.conversation import Conversation, build_system_prompt
 from nova.llm.ollama import OllamaClient
-from nova.tools import build_registry
+from nova.tools import build_registry, memory
 
 FRASES = [
     "hola",
@@ -58,7 +58,11 @@ def main() -> int:
 
     for frase in FRASES:
         t0 = time.monotonic()
-        reply = agent.run(build_system_prompt(awareness.snapshot()), conv.history(), frase)
+        reply = agent.run(
+            build_system_prompt(awareness.snapshot(), memory.para_prompt()),
+            conv.history(),
+            frase,
+        )
         dt = time.monotonic() - t0
         conv.add_user(frase)
         conv.add_assistant(reply.text)

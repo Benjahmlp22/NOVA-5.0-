@@ -48,9 +48,32 @@ _RELLENO_FINAL = re.compile(
 # pasar "¿En qué te puedo ayudar hoy?" — el pronombre se le había
 # adelantado al verbo — que es literalmente lo que NOVA respondió a
 # "¿cómo estás?" en el log del 25/07 y en el smoke del 26/08.
+# Y NO va anclada al final. El resto de filtros sí lo están, porque una
+# pregunta en medio suele ser contenido; ésta no: una pregunta cuyo tema
+# es "ayudarte" es relleno esté donde esté. Medido el 26/08: el modelo
+# respondió "¡Hola! ¿En qué puedo ayudarte hoy? Ya has abierto un
+# juego...", colando la coletilla en medio y salvándose del ancla.
 _PREGUNTA_DE_AYUDA = re.compile(
     r"(?:^|(?<=[.!?]))\s*[¿]?[^.!?]{0,80}?"
     r"\b(?:ayudar(?:te|le)?|asistir(?:te|le)?|servir(?:te|le)?)\b"
+    r"[^.!?]{0,40}\?",
+    re.IGNORECASE,
+)
+
+# Segunda red: una pregunta final cuyo objeto es "algo más" / "alguna
+# otra cosa" no tiene contenido, la envuelva el verbo que la envuelva.
+# Del smoke del 26/08 sobre qwen3.5:4b, dos variantes en siete frases:
+#   "¿Necesitas que haga algo más por ti?"
+#   "¿Quieres que haga algo más?"
+# Perseguir el verbo ("necesitas", "quieres", "puedo"...) no acaba nunca;
+# lo que no cambia es el "algo más", así que se ancla ahí.
+#
+# Ojo a la diferencia con una oferta CONCRETA — "¿Quieres cerrar
+# alguna?" —, que sí se conserva: esa nombra una acción, y decidir por el
+# usuario cuál de dos ofertas es útil no es trabajo de un regex.
+_PREGUNTA_VACIA = re.compile(
+    r"(?:^|(?<=[.!?]))\s*[¿]?[^.!?]{0,80}?"
+    r"\b(?:algo m[aá]s|alguna (?:otra )?cosa(?: m[aá]s)?)\b"
     r"[^.!?]{0,40}\?\s*$",
     re.IGNORECASE,
 )
@@ -84,6 +107,7 @@ def pulir(texto: str) -> str:
     for _ in range(3):
         nuevo = _RELLENO_FINAL.sub(r"\1", t).strip()
         nuevo = _PREGUNTA_DE_AYUDA.sub("", nuevo).strip()
+        nuevo = _PREGUNTA_VACIA.sub("", nuevo).strip()
         if nuevo == t:
             break
         t = nuevo

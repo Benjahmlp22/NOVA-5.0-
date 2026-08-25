@@ -112,6 +112,28 @@ def forget(query: str) -> ToolResult:
     return ToolResult(ok=True, message=f"Olvidado ({borrados} recuerdo(s)).")
 
 
+# Cuántos hechos se le meten al modelo en CADA turno. Seis caben en unas
+# pocas decenas de tokens de prefill; la lista entera crecería sin techo
+# y el prefill se paga en cada mensaje, que es justo lo que encarece la
+# latencia en inferencia local.
+MAX_HECHOS_EN_PROMPT = 6
+
+
+def para_prompt(limite: int = MAX_HECHOS_EN_PROMPT) -> str:
+    """Los hechos más recientes, listos para el system prompt.
+
+    `build_system_prompt` acepta un `memory_hint` desde NOVA4... y nadie
+    se lo pasaba nunca. El resultado es que NOVA sólo recordaba algo si
+    el modelo acertaba a llamar a `memory.recall` por su cuenta, cosa que
+    en el smoke no hizo ni una vez: acertó el color favorito porque
+    seguía en el historial de la conversación, no porque lo recordara.
+    """
+    facts = _load()
+    if not facts:
+        return ""
+    return "\n".join(f"- {f['text']}" for f in facts[-limite:])
+
+
 def register(reg) -> None:  # noqa: ANN001
     reg.register(Tool(
         name="memory.remember",

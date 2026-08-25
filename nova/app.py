@@ -34,7 +34,7 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
-from .tools import PendingConfirmation, build_registry
+from .tools import PendingConfirmation, build_registry, memory
 from .ui import GlowBorder, Orb
 from .voice import Speaker, VoiceListener, play_chime
 
@@ -84,7 +84,9 @@ class _Worker(QObject):
         self.awareness = awareness
 
     def procesar(self, mensaje: str) -> None:
-        prompt = build_system_prompt(self.awareness.snapshot())
+        # `memory.para_prompt()` lee un JSON de unos pocos KB; a
+        # diferencia del clima, esto sí puede estar en el camino crítico.
+        prompt = build_system_prompt(self.awareness.snapshot(), memory.para_prompt())
         respuesta = self.agent.run(prompt, self.conv.history(), mensaje)
 
         self.conv.add_user(mensaje)

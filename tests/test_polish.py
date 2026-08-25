@@ -96,6 +96,29 @@ def test_coletillas_que_nova4_dejaba_pasar(entrada, esperado):
     assert pulir(entrada) == esperado
 
 
+@pytest.mark.parametrize("entrada,esperado", [
+    # Smoke del 26/08 sobre qwen3.5:4b, con el filtro anterior ya puesto.
+    ("Ahora son las 01:52. ¿Necesitas que haga algo más por ti?",
+     "Ahora son las 01:52."),
+    ("Estás viendo a Claude. ¿Quieres que haga algo más?",
+     "Estás viendo a Claude."),
+    ("Hecho. ¿Puedo hacer alguna otra cosa?", "Hecho."),
+])
+def test_pregunta_por_algo_mas_es_relleno_lo_envuelva_el_verbo_que_sea(entrada, esperado):
+    assert pulir(entrada) == esperado
+
+
+def test_coletilla_de_ayuda_tambien_en_medio():
+    """Caso real del 26/08: el modelo la coló y siguió hablando.
+
+    El resto de filtros van anclados al final porque una pregunta en
+    medio suele ser contenido. Ésta no: "¿en qué puedo ayudarte?" es
+    relleno esté donde esté.
+    """
+    sucio = "¡Hola! ¿En qué puedo ayudarte hoy? Ya has abierto un juego."
+    assert pulir(sucio) == "¡Hola! Ya has abierto un juego."
+
+
 def test_oferta_de_accion_concreta_sigue_viva():
     """Una oferta accionable no es relleno: se conserva a propósito.
 
