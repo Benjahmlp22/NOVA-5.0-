@@ -1,0 +1,16 @@
+# NOVA 4 — todo local, nada de pago.
+#   pip install -r requirements.txt
+
+PyQt5>=5.15        # overlays (orbe, glow, subtítulos)
+vosk>=0.3.45       # reconocimiento de voz offline
+sounddevice>=0.4   # micrófono y chime
+numpy>=1.24        # síntesis del chime
+pyttsx3>=2.90      # voz (SAPI5 de Windows, gratis)
+httpx>=0.27        # cliente de Ollama
+psutil>=5.9        # estado del sistema y procesos
+mss>=9.0           # capturas de pantalla
+python-dotenv>=1.0 # configuración
+
+# Desarrollo
+pytest>=8.0
+ruff>=0.6

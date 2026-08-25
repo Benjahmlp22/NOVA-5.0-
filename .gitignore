@@ -1,0 +1,20 @@
+# Entorno y cachés
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Datos de ejecución: memoria, índices, capturas, logs. Son del usuario,
+# no del proyecto, y cambian en cada sesión.
+data/
+workspace/
+
+# Configuración local. .env.example sí se versiona.
+.env
+
+# Modelos de voz descargados (cientos de MB o varios GB).
+models/
+
+# Corpus de audio para bench_stt.py: grabaciones del usuario.
+bench/audio/

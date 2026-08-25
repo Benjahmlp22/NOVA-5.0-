@@ -1,0 +1,20 @@
+[project]
+name = "nova"
+version = "4.0.0"
+description = "Asistente de escritorio local por voz — Ollama + Vosk, sin nube ni API keys."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# E501: el formateo lo decide quien escribe, no el linter.
+# SIM105: `contextlib.suppress` no siempre se lee mejor que try/except.
+# UP042: StrEnum requiere 3.11+ y `str, Enum` funciona igual de bien.
+ignore = ["E501", "SIM105", "UP042"]
