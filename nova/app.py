@@ -20,10 +20,13 @@ Flujo (conversación continua, no de un solo turno):
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication
@@ -375,19 +378,66 @@ class Nova(QObject):
         self._reposo()
 
 
-def run() -> int:
-    """Punto de entrada: monta la app Qt y entra en el bucle de eventos."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(CONFIG.log_file, encoding="utf-8"),
-        ],
+def _parsear_argumentos(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="nova",
+        description="NOVA — asistente de escritorio local por voz.",
     )
-    for ruidoso in ("httpx", "httpcore", "urllib3"):
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Escribe el detalle completo (audio, parciales, tiempos) al fichero de log.",
+    )
+    return parser.parse_args(argv)
+
+
+def configurar_logging(debug: bool = False, destino: Path | None = None) -> None:
+    """Consola limpia, fichero detallado.
+
+    Cuando el audio falla es en directo y no se puede reproducir: o quedó
+    escrito, o no hay diagnóstico posible. Por eso el fichero se lleva
+    TODO (incluidos los parciales de Vosk, que son DEBUG) mientras la
+    consola se queda en INFO — si no, la consola es ilegible justo cuando
+    más falta hace mirarla.
+
+    El fichero rota: en NOVA4 era un `FileHandler` a secas y crecía sin
+    techo. Con `--debug` cada frase deja varias líneas, así que sin
+    rotación esto se come el disco en sesiones largas.
+    """
+    raiz = logging.getLogger()
+    raiz.setLevel(logging.DEBUG if debug else logging.INFO)
+    for viejo in list(raiz.handlers):
+        raiz.removeHandler(viejo)
+
+    formato = logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S"
+    )
+
+    consola = logging.StreamHandler(sys.stdout)
+    consola.setLevel(logging.INFO)
+    consola.setFormatter(formato)
+    raiz.addHandler(consola)
+
+    ruta = destino or CONFIG.log_file
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    fichero = RotatingFileHandler(
+        ruta, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    fichero.setLevel(logging.DEBUG if debug else logging.INFO)
+    fichero.setFormatter(formato)
+    raiz.addHandler(fichero)
+
+    for ruidoso in ("httpx", "httpcore", "urllib3", "comtypes"):
         logging.getLogger(ruidoso).setLevel(logging.WARNING)
+
+    if debug:
+        log.info("Modo depuración: el detalle va a %s", ruta)
+
+
+def run(argv: list[str] | None = None) -> int:
+    """Punto de entrada: monta la app Qt y entra en el bucle de eventos."""
+    args = _parsear_argumentos(argv)
+    configurar_logging(debug=args.debug)
 
     app = QApplication(sys.argv)
     app.setApplicationName("NOVA")

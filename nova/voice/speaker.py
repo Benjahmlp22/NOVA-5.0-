@@ -99,6 +99,10 @@ class Speaker:
         limpio = limpiar_para_voz(texto)
         if limpio:
             log.info("digo: %r", limpio)
+            # Una petición nueva cancela la interrupción anterior: si no,
+            # el "Dime." con el que NOVA acusa el wake word se perdería,
+            # porque despertar mientras habla llama antes a shut_up().
+            self._interrupt.clear()
             self._queue.put(limpio)
         else:
             log.info("nada que decir tras limpiar: %r", texto)
@@ -133,7 +137,18 @@ class Speaker:
             item = self._queue.get()
             if item is _STOP:
                 break
-            self._interrupt.clear()
+
+            # `shut_up()` vacía la cola, pero esta frase ya salió de ella:
+            # está en la mano de este hilo y la cola no la puede tocar.
+            # Sin esta comprobación, interrumpir a NOVA justo aquí hacía
+            # que empezara a hablar igual, un instante después de haberla
+            # mandado callar. En NOVA4 el flag existía, se ponía y se
+            # limpiaba... y no se consultaba en ningún sitio.
+            if self._interrupt.is_set():
+                log.debug("descarto por interrupción: %r", item)
+                self._interrupt.clear()
+                continue
+
             self._speaking.set()
             self._on_start()
             t0 = time.monotonic()

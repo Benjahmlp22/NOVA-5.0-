@@ -326,3 +326,57 @@ def test_modelo_que_no_existe_se_detecta_sin_arrancar_hilo(tmp_path):
     assert oyente.start() is False
     assert "No encuentro el modelo de voz" in oyente.error
     assert not oyente.ready
+
+
+# ── Interrumpir a NOVA mientras habla ───────────────────────────────
+#
+# `Speaker._interrupt` existía en NOVA4: se ponía en `shut_up()` y se
+# limpiaba al principio del bucle... y no se consultaba en ningún sitio.
+# Era un flag muerto que hacía creer que la interrupción estaba resuelta.
+
+def _hablante():
+    from nova.voice.speaker import Speaker
+
+    # enabled=True pero sin `start()`: nadie consume la cola, así que se
+    # puede mirar qué queda dentro sin depender de SAPI ni de tiempos.
+    return Speaker(enabled=True)
+
+
+def test_callar_vacia_lo_que_estaba_en_cola():
+    voz = _hablante()
+    voz.say("primera frase")
+    voz.say("segunda frase")
+    assert voz._queue.qsize() == 2
+
+    voz.shut_up()
+    assert voz._queue.empty()
+
+
+def test_callar_marca_la_frase_que_ya_iba_en_camino():
+    """La frase que ya salió de la cola no la puede parar vaciar la cola."""
+    voz = _hablante()
+    voz.say("lo que sea")
+    voz.shut_up()
+    assert voz._interrupt.is_set()
+
+
+def test_hablar_de_nuevo_cancela_la_interrupcion():
+    """Si no, el "Dime." del wake word se perdería.
+
+    Despertar mientras NOVA habla llama a `shut_up()` y justo después
+    dice el saludo: con el flag pegajoso, ese saludo se descartaría.
+    """
+    voz = _hablante()
+    voz.shut_up()
+    assert voz._interrupt.is_set()
+
+    voz.say("Dime.")
+    assert not voz._interrupt.is_set()
+    assert voz._queue.qsize() == 1
+
+
+def test_texto_vacio_no_ocupa_sitio_en_la_cola():
+    voz = _hablante()
+    voz.say("   ")
+    voz.say("**")  # sólo markdown: `limpiar_para_voz` se lo come
+    assert voz._queue.empty()
