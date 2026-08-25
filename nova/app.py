@@ -95,6 +95,8 @@ class Nova(QObject):
     _voz_despierta = pyqtSignal()
     _voz_comando = pyqtSignal(str)
     _voz_dormir = pyqtSignal(str)
+    _voz_lista = pyqtSignal()
+    _voz_error = pyqtSignal(str)
     _habla_inicio = pyqtSignal()
     _habla_fin = pyqtSignal()
 
@@ -144,10 +146,14 @@ class Nova(QObject):
             on_wake=self._voz_despierta.emit,
             on_command=self._voz_comando.emit,
             on_sleep=self._voz_dormir.emit,
+            on_ready=self._voz_lista.emit,
+            on_error=self._voz_error.emit,
         )
         self._voz_despierta.connect(self._al_despertar)
         self._voz_comando.connect(self._al_comando)
         self._voz_dormir.connect(self._al_dormir)
+        self._voz_lista.connect(self._al_voz_lista)
+        self._voz_error.connect(self._al_voz_error)
         self._habla_inicio.connect(self._hablando_inicio)
         self._habla_fin.connect(self._hablando_fin)
 
@@ -184,17 +190,22 @@ class Nova(QObject):
         else:
             self._precalentar_modelo()
 
-        if self.listener.start():
-            self.orb.set_estado("dormida")
-            log.info("NOVA lista. Di «%s».", CONFIG.wake_word)
-        else:
-            self.orb.set_estado("apagada")
-            log.error("Voz no disponible: %s", self.listener.error)
-            self._decir(
-                f"Voz no disponible: {self.listener.error}",
-                estado="apagada",
-                hablar=False,
-            )
+        # "preparando" hasta que el modelo de voz esté cargado de verdad.
+        # start() ya no bloquea, así que aquí NOVA todavía no oye nada:
+        # decir "dormida" en este punto sería mentirle al usuario durante
+        # los segundos que tarde la carga (42 s medidos con el es-0.42).
+        self.orb.set_estado("preparando")
+        if not self.listener.start():
+            self._al_voz_error(self.listener.error)
+
+    def _al_voz_lista(self) -> None:
+        self.orb.set_estado("dormida")
+        log.info("NOVA lista. Di «%s».", CONFIG.wake_word)
+
+    def _al_voz_error(self, mensaje: str) -> None:
+        self.orb.set_estado("apagada")
+        log.error("Voz no disponible: %s", mensaje)
+        self._decir(f"Voz no disponible: {mensaje}", estado="apagada", hablar=False)
 
     def _precalentar_modelo(self) -> None:
         """Paga la carga en frío del modelo al arrancar, no al primer "NOVA".

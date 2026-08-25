@@ -4,6 +4,7 @@ Un círculo pequeño, siempre encima, arrastrable.  Sin panel, sin
 dashboard, sin ventana que gestionar — se abre y ya está.
 
 Estados (lo que ves de un vistazo):
+    preparando  azul apagado, medio      → cargando el modelo de voz
     dormida   gris, respirando lento     → escuchando el wake word
     escucha   azul, ondas rápidas        → te está oyendo
     pensando  blanco, ondas medias       → procesando
@@ -23,6 +24,11 @@ TAMANO = 62
 _BARRAS = 3
 
 _COLORES = {
+    # "preparando" NO puede parecerse a "dormida": durante la carga del
+    # modelo de voz NOVA todavía no oye, y en NOVA4 esa diferencia no se
+    # veía por ningún sitio. Azul apagado — misma familia que "escucha",
+    # pero sin brillo: se lee como "va a estar, aún no está".
+    "preparando": QColor(96, 118, 148),
     "dormida": QColor(150, 152, 158),
     "escucha": QColor(77, 163, 255),
     "pensando": QColor(240, 240, 242),
@@ -30,6 +36,7 @@ _COLORES = {
     "apagada": QColor(90, 92, 98),
 }
 _VELOCIDAD = {
+    "preparando": 0.12,
     "dormida": 0.045,
     "escucha": 0.30,
     "pensando": 0.18,

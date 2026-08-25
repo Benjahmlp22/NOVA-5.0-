@@ -23,6 +23,7 @@ import logging
 import queue
 import re
 import threading
+import time
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -66,6 +67,8 @@ class VoiceListener:
         on_partial: Callable[[str], None] | None = None,
         on_command: Callable[[str], None] | None = None,
         on_sleep: Callable[[str], None] | None = None,
+        on_ready: Callable[[], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         self.model_path = Path(model_path)
         # Detección: Vosk transcribe "nova" mal muy a menudo — sobre todo
@@ -88,11 +91,14 @@ class VoiceListener:
         self._on_partial = on_partial or (lambda text: None)
         self._on_command = on_command or (lambda text: None)
         self._on_sleep = on_sleep or (lambda motivo: None)
+        self._on_ready = on_ready or (lambda: None)
+        self._on_error = on_error or (lambda mensaje: None)
 
         self._awake = False
         self._awake_bytes = 0
         self._running = False
         self._muted = threading.Event()
+        self._ready = threading.Event()
         self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=64)
         self._thread: threading.Thread | None = None
         self._model = None
@@ -107,6 +113,11 @@ class VoiceListener:
     @property
     def available(self) -> bool:
         return self._model is not None
+
+    @property
+    def ready(self) -> bool:
+        """El modelo ya está cargado y el micrófono abierto."""
+        return self._ready.is_set()
 
     def mute(self) -> None:
         """Deja de procesar audio (mientras NOVA habla, para no oírse)."""
@@ -124,28 +135,29 @@ class VoiceListener:
     # ── Ciclo de vida ────────────────────────────────────────────────
 
     def start(self) -> bool:
+        """Arranca la escucha. NO bloquea: el modelo se carga en su hilo.
+
+        En NOVA4 el `Model(...)` de Vosk se hacía aquí, es decir, en el
+        hilo de Qt. Con el modelo grande (es-0.42, 2.3 GB) eso costaba
+        42 s medidos en el log del 25/07 — de 23:09:36 ("Modelo
+        precalentado") a 23:10:18 ("Escuchando") — y durante todo ese
+        rato la interfaz no repintaba y decir "NOVA" no hacía nada.
+        Nada avisaba: parecía que NOVA estaba lista y simplemente no
+        hacía caso.
+
+        Ahora `start()` sólo comprueba que el modelo existe (una llamada
+        al sistema de archivos) y devuelve el control enseguida. Cuando
+        la carga termina de verdad se avisa por `on_ready`; si falla, por
+        `on_error`.
+        """
         if not (self.model_path / "am").exists() and not (self.model_path / "conf").exists():
             self.error = f"No encuentro el modelo de voz en {self.model_path}"
             log.error(self.error)
-            return False
-        try:
-            from vosk import Model, SetLogLevel
-
-            SetLogLevel(-1)  # sin el spam interno de kaldi
-            self._model = Model(str(self.model_path))
-        except ImportError:
-            self.error = "Falta el paquete vosk (pip install vosk)"
-            log.error(self.error)
-            return False
-        except Exception as exc:
-            self.error = f"No pude cargar el modelo de voz: {exc}"
-            log.exception(self.error)
             return False
 
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True, name="voz")
         self._thread.start()
-        log.info("Escuchando. Di «%s».", self.wake_re.pattern)
         return True
 
     def stop(self) -> None:
@@ -153,14 +165,32 @@ class VoiceListener:
 
     # ── Bucle ────────────────────────────────────────────────────────
 
+    def _fallar(self, mensaje: str) -> None:
+        self.error = mensaje
+        log.error(mensaje)
+        self._running = False
+        try:
+            self._on_error(mensaje)
+        except Exception:
+            log.debug("callback de error falló", exc_info=True)
+
     def _run(self) -> None:
         try:
             import sounddevice as sd
-            from vosk import KaldiRecognizer
+            from vosk import KaldiRecognizer, Model, SetLogLevel
         except ImportError as exc:
-            self.error = f"Falta una dependencia de audio: {exc}"
-            log.error(self.error)
+            self._fallar(f"Falta una dependencia de audio: {exc}")
             return
+
+        # La carga del modelo vive aquí, no en start(): ver su docstring.
+        t0 = time.monotonic()
+        try:
+            SetLogLevel(-1)  # sin el spam interno de kaldi
+            self._model = Model(str(self.model_path))
+        except Exception as exc:
+            self._fallar(f"No pude cargar el modelo de voz: {exc}")
+            return
+        log.info("Modelo de voz cargado en %.1fs (%s)", time.monotonic() - t0, self.model_path.name)
 
         rec = KaldiRecognizer(self._model, SAMPLE_RATE)
         rec.SetWords(False)
@@ -188,6 +218,13 @@ class VoiceListener:
                 channels=1,
                 callback=callback,
             ):
+                self._ready.set()
+                log.info("Escuchando. Di «%s».", self.wake_re.pattern)
+                try:
+                    self._on_ready()
+                except Exception:
+                    log.debug("callback de listo falló", exc_info=True)
+
                 while self._running:
                     try:
                         data = self._audio_q.get(timeout=0.5)
@@ -197,8 +234,9 @@ class VoiceListener:
                         continue
                     self._feed(rec, data)
         except Exception as exc:
-            self.error = f"Error con el micrófono: {exc}"
-            log.exception(self.error)
+            self._ready.clear()
+            log.exception("error con el micrófono")
+            self._fallar(f"Error con el micrófono: {exc}")
 
     def _feed(self, rec, data: bytes) -> None:  # noqa: ANN001
         # Timeout de "despierta": se mide en audio procesado, no en reloj
