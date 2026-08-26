@@ -10,7 +10,6 @@ import ctypes
 import logging
 import platform
 import socket
-import subprocess
 
 import psutil
 
@@ -153,41 +152,22 @@ def close_app(name: str) -> ToolResult:
     return ToolResult(ok=True, message=f"He cerrado {name} ({cerrados} proceso(s)).")
 
 
-def volume(level: int) -> ToolResult:
-    """Sube/baja el volumen maestro con nircmd si está; si no, avisa."""
-    nivel = max(0, min(100, int(level)))
-    try:
-        subprocess.run(
-            ["nircmd.exe", "setsysvolume", str(int(nivel * 655.35))],
-            check=True, capture_output=True, timeout=5,
-        )
-        return ToolResult(ok=True, message=f"Volumen al {nivel}%.")
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return ToolResult(
-            ok=False,
-            message="No puedo cambiar el volumen: falta nircmd en el sistema.",
-        )
-
-
 def register(reg) -> None:  # noqa: ANN001
     reg.register(Tool(
         name="pc.status",
-        description="Estado del PC ahora: CPU, RAM, procesos y batería",
+        description="Estado del PC: CPU, RAM, procesos, batería",
         handler=pc_status,
         risk=Risk.SAFE,
     ))
     reg.register(Tool(
         name="pc.hardware",
-        description="Especificaciones del equipo: CPU, RAM, discos, sistema",
+        description="Specs del equipo: CPU, RAM, discos, sistema",
         handler=hardware,
         risk=Risk.SAFE,
     ))
     reg.register(Tool(
         name="pc.active_window",
-        description=(
-            "Qué aplicación o juego tiene el usuario en primer plano ahora mismo. "
-            "Úsala cuando pregunte qué está haciendo, jugando o mirando"
-        ),
+        description="Qué app o juego tiene delante: qué hace, juega o mira ahora",
         handler=active_window,
         risk=Risk.SAFE,
     ))
@@ -197,7 +177,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=running_apps,
         schema={
             "type": "object",
-            "properties": {"top_n": {"type": "integer", "description": "Cuántas listar"}},
+            "properties": {"top_n": {"type": "integer"}},
         },
         risk=Risk.SAFE,
     ))
@@ -213,19 +193,8 @@ def register(reg) -> None:  # noqa: ANN001
         handler=close_app,
         schema={
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Nombre de la app"}},
+            "properties": {"name": {"type": "string"}},
             "required": ["name"],
         },
         risk=Risk.DANGEROUS,
-    ))
-    reg.register(Tool(
-        name="pc.volume",
-        description="Ajusta el volumen del sistema (0-100)",
-        handler=volume,
-        schema={
-            "type": "object",
-            "properties": {"level": {"type": "integer", "description": "Nivel 0-100"}},
-            "required": ["level"],
-        },
-        risk=Risk.MEDIUM,
     ))

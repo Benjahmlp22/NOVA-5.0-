@@ -27,6 +27,12 @@ nvidia-cudnn-cu12>=9,<10
 # Búsqueda en internet. Sin API key y sin cuenta, como todo aquí.
 ddgs>=9.0
 
+# Volumen por aplicación: habla con el mezclador de Windows (Core Audio),
+# que es lo mismo que usa el panel de volumen del sistema. Sustituye a
+# nircmd.exe, que era un ejecutable de terceros que casi nadie tiene.
+pycaw>=20240210
+comtypes>=1.2
+
 # Desarrollo
 pytest>=8.0
 ruff>=0.6

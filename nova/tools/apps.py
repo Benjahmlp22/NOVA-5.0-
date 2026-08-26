@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import unicodedata
 from difflib import SequenceMatcher
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from ..config import CONFIG
 from .registry import Risk, Tool, ToolResult
+from .web_apps import web_de
 
 log = logging.getLogger("nova.tools.apps")
 
@@ -58,7 +60,45 @@ def _norm(text: str) -> str:
     return "".join(out).strip()
 
 
-def _scan_installed() -> dict[str, str]:
+def _scan_menu_inicio() -> dict[str, str]:
+    """Pregunta a Windows por TODO lo que hay en el menú inicio.
+
+    `Get-StartApps` devuelve también las apps de la Microsoft Store, que
+    no tienen acceso directo en disco y por tanto eran invisibles al
+    escaneo de .lnk: WhatsApp, Calculadora, Fotos, Xbox... Medido el
+    27/08 en este PC: 301 aplicaciones frente a 171 buscando .lnk.
+
+    Se lanza con `-NoProfile`: el perfil de PowerShell del usuario puede
+    tardar segundos en cargar, y aquí sólo hace falta un comando.
+    """
+    try:
+        salida = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-StartApps | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        datos = json.loads(salida.stdout or "[]")
+    except Exception:  # noqa: BLE001
+        log.debug("Get-StartApps no funcionó; me quedo con los accesos directos",
+                  exc_info=True)
+        return {}
+
+    if isinstance(datos, dict):
+        datos = [datos]
+    encontradas: dict[str, str] = {}
+    for item in datos:
+        nombre = _norm(str(item.get("Name") or ""))
+        app_id = str(item.get("AppID") or "")
+        if nombre and app_id:
+            # `shell:AppsFolder\<AppID>` abre igual una app de la Store
+            # que un programa de toda la vida.
+            encontradas.setdefault(nombre, f"shell:AppsFolder\{app_id}")
+    return encontradas
+
+
+def _scan_accesos_directos() -> dict[str, str]:
     """Recorre menú inicio y escritorio buscando accesos directos."""
     found: dict[str, str] = {}
     roots = [
@@ -78,6 +118,45 @@ def _scan_installed() -> dict[str, str]:
         except (PermissionError, OSError):
             continue
     return found
+
+
+def _scan_installed() -> dict[str, str]:
+    """Todo lo que se puede abrir. Get-StartApps si se puede, .lnk si no.
+
+    Medido el 27/08 en este PC:
+
+        Get-StartApps        299 apps en  2.4 s
+        escaneo de .lnk      171 apps en 20.7 s
+
+    El escaneo de accesos directos tarda casi diez veces más para añadir
+    50 entradas, y son "Component Services", "Panel de control",
+    "Administrative Tools"... cosas que nadie pide por voz. Así que se
+    queda de RESERVA, para cuando PowerShell no esté disponible.
+    """
+    encontradas = _scan_menu_inicio()
+    if encontradas:
+        log.info("índice de apps: %d entradas (menú inicio)", len(encontradas))
+        return encontradas
+
+    log.info("Get-StartApps no dio nada; escaneo accesos directos (más lento)")
+    encontradas = _scan_accesos_directos()
+    log.info("índice de apps: %d entradas (accesos directos)", len(encontradas))
+    return encontradas
+
+
+def precalentar_indice() -> None:
+    """Construye el índice en segundo plano al arrancar.
+
+    Son un par de segundos, pero caían sobre el primer "abre Discord" del
+    día — justo cuando el usuario está esperando. Aquí no los nota nadie.
+    """
+    def _tarea() -> None:
+        try:
+            _load_index()
+        except Exception:  # noqa: BLE001
+            log.debug("no pude precalentar el índice de apps", exc_info=True)
+
+    threading.Thread(target=_tarea, daemon=True, name="indice-apps").start()
 
 
 def _load_index(force: bool = False) -> dict[str, str]:
@@ -137,22 +216,52 @@ def open_app(name: str) -> ToolResult:
     apps = _load_index()
     match = _best_match(consulta, apps)
     if match is None:
+        # No está instalado. Antes se acababa aquí, y "no lo encuentro"
+        # es cierto y no sirve de nada: lo que querías era verlo. Netflix
+        # o YouTube no tienen ejecutable en un PC normal.
+        destino = web_de(clave) or web_de(consulta)
+        if destino:
+            return _abrir_web(*destino)
         return ToolResult(
             ok=False,
-            message=f"No encuentro «{consulta}» instalado. Puedo reescanear si lo instalaste hace poco.",
+            message=f"No tienes «{consulta}» instalado ni lo conozco como web. "
+                    "Puedo reescanear si lo instalaste hace poco.",
         )
     nombre, ruta, _ = match
     try:
-        os.startfile(ruta)  # noqa: S606 — es un .lnk del propio usuario
+        os.startfile(ruta)  # noqa: S606 — del propio menú inicio del usuario
     except Exception as exc:
+        # La app estaba en el índice pero no arranca (desinstalada a
+        # medias, entrada rota). Si además existe como web, mejor eso que
+        # un error.
+        destino = web_de(clave)
+        if destino:
+            log.info("%s no arrancó (%s); tiro de la web", nombre, exc)
+            return _abrir_web(*destino)
         return ToolResult(ok=False, message=f"No pude abrir {nombre}: {exc}")
     return ToolResult(ok=True, message=f"Listo, he abierto {nombre.title()}.", data={"app": nombre})
+
+
+def _abrir_web(nombre: str, url: str) -> ToolResult:
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+    except Exception as exc:  # noqa: BLE001
+        return ToolResult(ok=False, message=f"No pude abrir {nombre}: {exc}")
+    return ToolResult(ok=True, message=f"Listo, he abierto {nombre} en el navegador.",
+                      data={"app": nombre, "web": url})
 
 
 def find_app(query: str) -> ToolResult:
     apps = _load_index()
     match = _best_match(query, apps)
     if match is None:
+        if web_de(query):
+            return ToolResult(
+                ok=True,
+                message=f"«{query}» no es una app, pero puedo abrírtelo en el navegador.",
+            )
         return ToolResult(ok=False, message=f"No tienes «{query}» instalado, o no lo encuentro.")
     nombre, ruta, score = match
     seguridad = "seguro" if score > 0.85 else "probablemente"
@@ -175,7 +284,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=open_app,
         schema={
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Nombre de la app"}},
+            "properties": {"name": {"type": "string"}},
             "required": ["name"],
         },
         risk=Risk.MEDIUM,
@@ -186,7 +295,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=find_app,
         schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Nombre a buscar"}},
+            "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
         risk=Risk.SAFE,

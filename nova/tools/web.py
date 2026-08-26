@@ -333,14 +333,11 @@ def abrir_url(url: str) -> ToolResult:
 def register(reg) -> None:  # noqa: ANN001
     reg.register(Tool(
         name="web.search",
-        description=(
-            "Busca algo en internet: precios, noticias, datos que no sabes. "
-            "Úsala cuando te pregunten por información que no está en el PC"
-        ),
+        description="Busca en internet: precios, noticias, datos que no están en el PC",
         handler=buscar,
         schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Qué buscar"}},
+            "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
         # Segura: no toca nada del sistema y no cuesta dinero. Que pidiera
@@ -354,7 +351,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=abrir_url,
         schema={
             "type": "object",
-            "properties": {"url": {"type": "string", "description": "La dirección"}},
+            "properties": {"url": {"type": "string"}},
             "required": ["url"],
         },
         risk=Risk.MEDIUM,

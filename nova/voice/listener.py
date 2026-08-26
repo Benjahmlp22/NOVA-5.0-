@@ -135,6 +135,7 @@ class VoiceListener:
         on_escuchando: Callable[[], None] | None = None,
         on_nivel: Callable[[float], None] | None = None,
         on_interrupcion: Callable[[], None] | None = None,
+        on_nada: Callable[[], None] | None = None,
     ) -> None:
         self.wake_word = normalizar_texto(wake_word)
         self.detector = detector or DetectorWake(wake_model, self.wake_word)
@@ -159,6 +160,9 @@ class VoiceListener:
         # Nivel real del micro, para que la onda del panel no mienta.
         self._on_nivel = on_nivel or (lambda nivel: None)
         self._on_interrupcion = on_interrupcion or (lambda: None)
+        # Se capturó algo y no salió nada de ahí. La interfaz tiene
+        # que enterarse o se queda diciendo "te escucho" para siempre.
+        self._on_nada = on_nada or (lambda: None)
 
         self._awake = False
         self._running = False
@@ -171,6 +175,11 @@ class VoiceListener:
         # para no confundir su propia voz con la del usuario.
         self._nivel_salida = 0.0
         self._bloques_hablando_encima = 0
+        # Acaba de despertar y aún no ha recibido la orden. Mientras dure,
+        # se le puede hablar sin volver a nombrarla aunque pases del hueco
+        # de seguimiento: te acaba de decir "dime" y estás pensando qué
+        # pedirle. Sin esto NOVA te ignoraba a media frase.
+        self._esperando_orden = False
         self.error = ""
 
         # Búfer circular: el último segundo, siempre. Se dimensiona en
@@ -249,6 +258,10 @@ class VoiceListener:
     def _en_seguimiento(self) -> bool:
         """¿Sigue abierto el turno como para hablarle sin decir su nombre?
 
+        Sí, siempre, mientras esté esperando la orden que acaba de pedir:
+        despertarla y quedarte pensando dos segundos no puede costarte
+        tener que llamarla otra vez.
+
         La conversación continua dice que tras responder sigue
         escuchando, y así queda. Lo que no puede es tener el micro
         abierto veinte segundos a todo lo que se diga en la habitación:
@@ -260,6 +273,8 @@ class VoiceListener:
         ese rato sigue DESPIERTA (no hace falta volver a esperar el
         chime), pero para hablarle hay que volver a nombrarla.
         """
+        if self._esperando_orden:
+            return True
         return time.monotonic() - self._ultimo_turno <= self.seguimiento_s
 
     def marcar_turno(self) -> None:
@@ -274,6 +289,7 @@ class VoiceListener:
     def sleep_now(self, motivo: str = "fin") -> None:
         if self._awake:
             self._awake = False
+            self._esperando_orden = False
             self._on_sleep(motivo)
 
     # ── Ciclo de vida ────────────────────────────────────────────────
@@ -488,6 +504,7 @@ class VoiceListener:
 
         senal = np.concatenate(trozos) if trozos else np.zeros(0, dtype=np.float32)
         if not hay_senal(senal):
+            self._on_nada()
             return
         self._entender(senal, exige_nombre=exige_nombre)
 
@@ -495,6 +512,7 @@ class VoiceListener:
 
     def _entender(self, senal: np.ndarray, *, exige_nombre: bool) -> None:
         if self.transcriptor is None:
+            self._on_nada()
             return
         t0 = time.monotonic()
         oido = self.transcriptor.transcribir_detallado(senal)
@@ -508,6 +526,7 @@ class VoiceListener:
         # es exactamente lo que hacía.
         if not oido.creible:
             log.info("descarto lo oído: %s", oido.motivo_descarte())
+            self._on_nada()
             return
 
         if exige_nombre:
@@ -517,9 +536,11 @@ class VoiceListener:
                 # vuelve a dormir sin haber hecho ruido — el chime no ha
                 # sonado, así que el usuario ni se entera.
                 log.debug("etapa 2 descarta la llamada: %r", texto)
+                self._on_nada()
                 return
             self._awake = True
             self._ultimo_turno = time.monotonic()
+            self._esperando_orden = not resto
             # El aviso lleva si viene orden pegada: sin eso, NOVA saluda
             # ("Dime.") y procesa la orden a la vez, hablándose encima.
             self._on_wake(bool(resto))
@@ -538,13 +559,17 @@ class VoiceListener:
         # cortas sí valen: son la respuesta a "¿confirmas que...?".
         if len(texto.split()) < 2 and texto not in _AFIRMACIONES:
             log.info("ignoro %r: demasiado corto para ser una orden", texto)
+            self._on_nada()
             return
 
         comando = self._quitar_nombre(texto)
         comando = texto if comando is None else comando
         if comando:
             self._ultimo_turno = time.monotonic()
+            self._esperando_orden = False
             self._on_command(comando)
+            return
+        self._on_nada()
 
     def _quitar_nombre(self, texto: str) -> str | None:
         """Quita el nombre del principio. None si no estaba.

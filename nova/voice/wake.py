@@ -38,6 +38,24 @@ from pathlib import Path
 
 log = logging.getLogger("nova.voice.wake")
 
+# Palabras que se le ofrecen al decodificador ADEMÁS del nombre, para que
+# tenga dónde poner lo que no es el nombre.
+#
+# Sale de un fallo real: un "nooo" alargado se colaba como "nova". Sin
+# alternativas, la gramática sólo puede elegir entre el nombre y "no sé
+# qué es", y un "noo" se le parece más al nombre que a la nada.
+#
+# Y no vale meter cualquier señuelo: probado el 26/08 sobre 14 frases de
+# Benja, con señuelos del tipo "no va" o "la novia" el recall se hundía
+# de 8/8 a 4/8 — esos SÍ son los mismos fonemas que el nombre. "no" y
+# "noo" se diferencian del nombre en una sílaba entera, que Vosk sí oye:
+#
+#     gramática                  despierta   falsas
+#     ["nova"]                      8/8        5/6
+#     ["nova","no"]                 8/8        5/6
+#     ["nova","no","noo"]           8/8        4/6
+SEÑUELOS = ("no", "noo", "nooo")
+
 
 # Puntuación que se quita de los BORDES de cada palabra, nunca de dentro.
 # Whisper puntúa —"NOVA, cierra Chrome."— y sin esto el nombre no casa
@@ -86,7 +104,7 @@ class DetectorWake:
             log.error(self.error)
             return False
 
-        gramatica = json.dumps([self.wake_word, "[unk]"])
+        gramatica = json.dumps([self.wake_word, *SEÑUELOS, "[unk]"])
         try:
             self._rec = KaldiRecognizer(self._modelo, 16000, gramatica)
             self.usa_gramatica = True
@@ -129,7 +147,10 @@ class DetectorWake:
         if not texto:
             return False
         if self.usa_gramatica:
-            return self.wake_word in texto.split()
+            palabras = texto.split()
+            # Con señuelos, que el decodificador elija "no" en vez del
+            # nombre ES la respuesta: significa que no te llamaban.
+            return self.wake_word in palabras
         return bool(self._patron.search(texto))
 
 

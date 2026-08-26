@@ -20,6 +20,7 @@ from PyQt5.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QMenu, QWidget
 
+from .panel import _AVISO
 from .panel import COLORES as _PALETA
 
 TAMANO = 62
@@ -47,6 +48,7 @@ class Orb(QWidget):
         self._estado = "apagada"
         self._fase = 0.0
         self._nivel = 0.0
+        self._pendientes = 0
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
@@ -70,6 +72,12 @@ class Orb(QWidget):
     def set_estado(self, estado: str) -> None:
         if estado != self._estado:
             self._estado = estado
+            self.update()
+
+    def set_pendientes(self, cuantos: int) -> None:
+        """Colapsada también tiene que avisar: si no, el recado se pierde."""
+        if cuantos != self._pendientes:
+            self._pendientes = max(0, int(cuantos))
             self.update()
 
     def set_nivel(self, nivel: float) -> None:
@@ -97,8 +105,11 @@ class Orb(QWidget):
         vel = _VELOCIDAD.get(self._estado, 0.0)
         if vel:
             self._fase += vel
+        elif self._pendientes:
+            # Dormida no anima nada, pero el aviso tiene que respirar.
+            self._fase += 0.06
         self._nivel *= 0.82
-        if vel or self._nivel > 0.001:
+        if vel or self._nivel > 0.001 or self._pendientes:
             self.update()
 
     def paintEvent(self, event) -> None:  # noqa: ANN001, N802
@@ -144,7 +155,19 @@ class Orb(QWidget):
             x = x0 + i * (ancho + hueco)
             p.drawRoundedRect(int(x), int(centro - alto / 2), ancho, int(alto), 2, 2)
 
+        self._pintar_aviso(p)
+
     # ── Interacción ──────────────────────────────────────────────────
+
+    def _pintar_aviso(self, p: QPainter) -> None:
+        if not self._pendientes:
+            return
+        pulso = 0.45 + 0.55 * abs(math.sin(self._fase * 1.6))
+        aviso = QColor(_AVISO)
+        aviso.setAlpha(int(255 * pulso))
+        p.setPen(Qt.NoPen)
+        p.setBrush(aviso)
+        p.drawEllipse(TAMANO - 20, 6, 11, 11)
 
     def mousePressEvent(self, e) -> None:  # noqa: ANN001, N802
         if e.button() == Qt.LeftButton:

@@ -123,8 +123,8 @@ def register(reg) -> None:  # noqa: ANN001
         schema={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Nombre o ruta relativa"},
-                "content": {"type": "string", "description": "Contenido del archivo"},
+                "path": {"type": "string"},
+                "content": {"type": "string"},
             },
             "required": ["path"],
         },
@@ -136,7 +136,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=create_folder,
         schema={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Nombre de la carpeta"}},
+            "properties": {"path": {"type": "string"}},
             "required": ["path"],
         },
         risk=Risk.MEDIUM,
@@ -147,7 +147,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=read_file,
         schema={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Ruta relativa"}},
+            "properties": {"path": {"type": "string"}},
             "required": ["path"],
         },
         risk=Risk.SAFE,
@@ -164,7 +164,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=delete_file,
         schema={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Ruta relativa"}},
+            "properties": {"path": {"type": "string"}},
             "required": ["path"],
         },
         risk=Risk.DANGEROUS,

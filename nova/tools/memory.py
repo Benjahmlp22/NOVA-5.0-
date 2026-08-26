@@ -137,28 +137,22 @@ def para_prompt(limite: int = MAX_HECHOS_EN_PROMPT) -> str:
 def register(reg) -> None:  # noqa: ANN001
     reg.register(Tool(
         name="memory.remember",
-        description=(
-            "Guarda un dato del usuario para recordarlo siempre "
-            "(su nombre, gustos, rutas, preferencias)"
-        ),
+        description="Guarda un dato del usuario: nombre, gustos, rutas, preferencias",
         handler=remember,
         schema={
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "El dato a recordar"}},
+            "properties": {"text": {"type": "string"}},
             "required": ["text"],
         },
         risk=Risk.SAFE,
     ))
     reg.register(Tool(
         name="memory.recall",
-        description=(
-            "Busca en lo que has guardado del usuario. Úsala ANTES de decir "
-            "que no sabes algo personal sobre él"
-        ),
+        description="Busca lo guardado del usuario. ANTES de decir que no sabes algo suyo",
         handler=recall,
         schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Sobre qué buscar"}},
+            "properties": {"query": {"type": "string"}},
         },
         risk=Risk.SAFE,
     ))
@@ -168,7 +162,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=forget,
         schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "Qué olvidar"}},
+            "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
         risk=Risk.DANGEROUS,

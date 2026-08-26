@@ -91,6 +91,9 @@ class Interfaz(QObject):
         self._estado = estado
         self.panel.set_estado(estado)
         self.orb.set_estado(estado)
+        # El borde también: a pantalla completa es lo ÚNICO que se ve, y
+        # en NOVA4 se quedaba azul mientras ella hablaba o pensaba.
+        self.glow.set_estado(estado)
 
     def set_nivel(self, nivel: float) -> None:
         self.panel.set_nivel(nivel)
@@ -106,6 +109,11 @@ class Interfaz(QObject):
         tipo, texto = describir(herramienta, dato)
         self.panel.añadir_accion(tipo, texto)
         log.debug("actividad: %s", texto)
+
+    def set_pendientes(self, cuantos: int) -> None:
+        """Recordatorios vencidos esperando a que le hables."""
+        self.panel.set_pendientes(cuantos)
+        self.orb.set_pendientes(cuantos)
 
     def turno_terminado(self) -> None:
         """Ya no está haciendo nada: las acciones se retiran solas."""

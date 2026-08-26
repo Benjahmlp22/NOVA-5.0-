@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
 from .bootstrap import configurar_logging, parsear_argumentos
@@ -44,7 +44,7 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
-from .tools import PendingConfirmation, build_registry, memory
+from .tools import PendingConfirmation, apps, build_registry, memory, recordatorios
 from .ui import Interfaz
 from .voice import Speaker, Transcriptor, VoiceListener, play_chime
 
@@ -52,6 +52,10 @@ log = logging.getLogger("nova.app")
 
 # Lo que NOVA contesta al oír su nombre. Corto: es un acuse de recibo,
 # no una frase.
+# Cada cuánto se mira si ha vencido algún recordatorio. Cinco segundos
+# es de sobra para algo que se mide en minutos, y no gasta nada.
+SEGUNDOS_ENTRE_REVISIONES = 5.0
+
 SALUDOS = ["Dime.", "Te escucho.", "¿Sí?"]
 DESPEDIDAS = ["Hasta luego.", "Aquí estaré.", "Vale."]
 
@@ -132,6 +136,7 @@ class Nova(QObject):
     _voz_error = pyqtSignal(str)
     _voz_escuchando = pyqtSignal()
     _voz_interrumpe = pyqtSignal()
+    _voz_nada = pyqtSignal()
     _habla_inicio = pyqtSignal()
     _habla_fin = pyqtSignal()
     # El nivel llega desde el hilo de audio y desde el de TTS, ~30 veces
@@ -209,6 +214,7 @@ class Nova(QObject):
             on_escuchando=self._voz_escuchando.emit,
             on_nivel=self._nivel.emit,
             on_interrupcion=self._voz_interrumpe.emit,
+            on_nada=self._voz_nada.emit,
             seguimiento_s=CONFIG.seguimiento_s,
             interrumpir=CONFIG.interrumpir,
         )
@@ -219,6 +225,7 @@ class Nova(QObject):
         self._voz_error.connect(self._al_voz_error)
         self._voz_escuchando.connect(self._al_voz_escuchando)
         self._voz_interrumpe.connect(self._al_interrumpirme)
+        self._voz_nada.connect(self._al_nada)
         self._nivel.connect(self.ui.set_nivel)
         self._habla_inicio.connect(self._hablando_inicio)
         self._habla_fin.connect(self._hablando_fin)
@@ -237,6 +244,7 @@ class Nova(QObject):
         self._pendiente: PendingConfirmation | None = None
         self._ocupada = False
         self._respuesta_en_curso = ""
+        self._avisos_pendientes: list = []
         self._voz_silenciada = False
 
     # ── Arranque / apagado ───────────────────────────────────────────
@@ -244,6 +252,16 @@ class Nova(QObject):
     def start(self) -> None:
         self._hilo.start()
         self.awareness.start()
+        # El índice de apps se construye ya, no en el primer
+        # "abre Discord" del día.
+        apps.precalentar_indice()
+
+        # Vigilante de recordatorios. Un temporizador de Qt y no un hilo:
+        # esto toca la interfaz, y todo lo que toca la interfaz vive en
+        # el hilo de Qt (ver la cabecera de este módulo).
+        self._reloj = QTimer(self)
+        self._reloj.timeout.connect(self._revisar_recordatorios)
+        self._reloj.start(int(SEGUNDOS_ENTRE_REVISIONES * 1000))
         self.speaker.start()
 
         self.ui.mostrar()
@@ -287,7 +305,62 @@ class Nova(QObject):
         log.info("me interrumpen")
         self.speaker.shut_up()
         self._respuesta_en_curso = ""
+        self._avisos_pendientes: list = []
         self.ui.set_estado("escucha")
+
+    def _al_nada(self) -> None:
+        """Se capturó algo y no salió nada: la interfaz vuelve a su sitio.
+
+        Sin esto el panel se quedaba en "te escucho" para siempre en
+        cuanto la etapa 1 abría la puerta por un ruido y la etapa 2 lo
+        descartaba — que es lo normal, para eso está.
+        """
+        if not self._ocupada:
+            self.glow.apagar()
+            self._reposo()
+
+    # ── Recordatorios ────────────────────────────────────────────────
+
+    def _revisar_recordatorios(self) -> None:
+        """¿Ha vencido algo? Y sobre todo: ¿es momento de decirlo?
+
+        Vencer no es hablar. Un aviso que te corta a mitad de partida
+        para algo que podía esperar treinta segundos es peor que no
+        tenerlo, así que por defecto queda pendiente y el panel parpadea.
+        Sólo las alarmas con hora fija interrumpen — para eso las pones.
+        """
+        try:
+            vencidos = recordatorios.pendientes()
+        except Exception:  # noqa: BLE001
+            log.debug("no pude leer los recordatorios", exc_info=True)
+            return
+
+        self._avisos_pendientes = vencidos
+        self.ui.set_pendientes(len(vencidos))
+        if not vencidos or self._ocupada or self.speaker.speaking:
+            return
+
+        alarmas = [r for r in vencidos if r.alarma]
+        # Si está hablando con ella, cualquier recordatorio cabe: ya
+        # tiene su atención y no se le está interrumpiendo nada.
+        if alarmas or self.listener.awake:
+            self._soltar_recordatorios(vencidos if self.listener.awake else alarmas)
+
+    def _soltar_recordatorios(self, avisos: list) -> None:
+        if not avisos:
+            return
+        textos = [r.texto for r in avisos]
+        recordatorios.marcar_avisados(textos)
+        self._avisos_pendientes = [r for r in self._avisos_pendientes if r not in avisos]
+        self.ui.set_pendientes(len(self._avisos_pendientes))
+
+        if len(textos) == 1:
+            frase = f"Te recuerdo: {textos[0]}."
+        else:
+            frase = "Tenías apuntado: " + "; ".join(textos) + "."
+        log.info("suelto %d recordatorio(s)", len(textos))
+        self.ui.set_respondido(frase)
+        self._decir(frase)
 
     def _al_voz_escuchando(self) -> None:
         """La etapa 1 ha abierto la puerta: se está capturando la frase.
@@ -358,7 +431,13 @@ class Nova(QObject):
             play_chime()
         self.ui.set_estado("escucha")
         if CONFIG.glow_enabled:
-            self.glow.encender()
+            self.glow.encender("escucha")
+
+        # Lo que quedó esperando se suelta ANTES de nada: es el momento
+        # en que por fin tienes su atención y ella la tuya.
+        if self._avisos_pendientes:
+            self._soltar_recordatorios(list(self._avisos_pendientes))
+            return
 
         if con_comando:
             # "NOVA abre discord" del tirón. Saludar aquí sería hablar
@@ -381,6 +460,7 @@ class Nova(QObject):
         self.ui.set_dicho(texto)
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
+        self._avisos_pendientes: list = []
 
         # ¿Está contestando a una confirmación pendiente?
         if self._pendiente is not None:
@@ -401,11 +481,18 @@ class Nova(QObject):
 
     def _al_dormir(self, motivo: str) -> None:
         self.glow.apagar()
+        self.ui.set_dicho("")
+        self.ui.set_respondido("")
+        self._respuesta_en_curso = ""
+        self._avisos_pendientes: list = []
         if not self._ocupada:
             self.ui.set_estado("dormida")
         if motivo == "despedida":
             import random
 
+            # `estado="dormida"` es la red por si la voz está apagada: sin
+            # ella nadie devolvería el orbe a su sitio y se quedaba en
+            # "te escucho" después de despedirse.
             self._decir(random.choice(DESPEDIDAS), estado="dormida")
 
     # ── Eventos del cerebro (llegan del hilo de trabajo) ─────────────
@@ -488,7 +575,7 @@ class Nova(QObject):
         if siguiente == "escucha" and CONFIG.glow_enabled:
             # La conversación sigue abierta: se nota en el glow que no
             # hace falta repetir "NOVA" para el siguiente turno.
-            self.glow.encender()
+            self.glow.encender("escucha")
         self.ui.set_estado(siguiente)
 
     def _hablando_inicio(self) -> None:

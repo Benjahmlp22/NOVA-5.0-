@@ -66,6 +66,9 @@ _FONDO = QColor(11, 11, 13, 238)
 _BORDE = QColor(38, 38, 44, 255)
 _TEXTO = QColor(228, 228, 232)
 _TENUE = QColor(128, 130, 138)
+# Ámbar para "tienes algo esperando". No rojo: no es un error, es un
+# recado — y el rojo ya significa que algo se ha roto.
+_AVISO = QColor(240, 186, 74)
 
 COLORES = {
     "preparando": QColor(96, 118, 148),    # azul apagado: va a estar, aún no está
@@ -119,6 +122,11 @@ class Panel(QWidget):
         self._acciones: deque[tuple[str, str]] = deque(maxlen=ACCIONES_VISIBLES)
         self._dicho = ""
         self._respondido = ""
+        # Cuántos recordatorios han vencido y esperan a que le hables.
+        # Se enseñan parpadeando en vez de interrumpiendo: un aviso que
+        # te corta a mitad de partida es peor que no tenerlo.
+        self._pendientes = 0
+        self._fase_aviso = 0.0
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
@@ -164,6 +172,11 @@ class Panel(QWidget):
         self._ajustar_alto()
         self.update()
 
+    def set_pendientes(self, cuantos: int) -> None:
+        if cuantos != self._pendientes:
+            self._pendientes = max(0, int(cuantos))
+            self.update()
+
     def añadir_accion(self, tipo: str, detalle: str) -> None:
         self._borrado.stop()
         self._acciones.append((tipo, detalle))
@@ -204,6 +217,8 @@ class Panel(QWidget):
         # el panel está vivo y que el silencio es silencio de verdad, no
         # una imagen congelada.
         self._niveles.append(self._nivel_actual)
+        if self._pendientes:
+            self._fase_aviso += 0.10
         # Caída suave: sin esto, al acabar una frase la onda se corta en
         # seco y parece que la app se ha colgado.
         self._nivel_actual *= 0.82
@@ -243,6 +258,27 @@ class Panel(QWidget):
         p.setPen(color)
         p.drawText(QRect(34, 12, 200, 20), Qt.AlignVCenter | Qt.AlignLeft,
                    ETIQUETAS.get(self._estado, self._estado))
+
+        # Aviso pendiente: un punto que respira al lado del minimizar.
+        # No dice QUÉ es —eso te lo cuenta cuando le hables— sólo que hay
+        # algo esperándote.
+        if self._pendientes:
+            import math
+
+            pulso = 0.45 + 0.55 * abs(math.sin(self._fase_aviso))
+            aviso = QColor(_AVISO)
+            aviso.setAlpha(int(255 * pulso))
+            p.setPen(Qt.NoPen)
+            p.setBrush(aviso)
+            p.drawEllipse(ANCHO - 54, 18, 9, 9)
+            if self._pendientes > 1:
+                fuente = QFont()
+                fuente.setPointSize(7)
+                fuente.setBold(True)
+                p.setFont(fuente)
+                p.setPen(_FONDO)
+                p.drawText(QRect(ANCHO - 54, 18, 9, 9), Qt.AlignCenter,
+                           str(min(9, self._pendientes)))
 
         # Botón de minimizar: un guion, sin adornos.
         p.setPen(QPen(_TENUE, 1.6))
