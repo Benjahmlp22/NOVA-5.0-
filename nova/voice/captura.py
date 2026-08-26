@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .audio import remuestrear, rms
+from .audio import SAMPLE_RATE, remuestrear, rms
 
 log = logging.getLogger("nova.voice.captura")
 
@@ -151,12 +151,54 @@ class _Grabadora:
         return np.concatenate(trozos).reshape(-1).astype(np.float32) / 32768.0
 
 
-def medir_ruido(camino: Camino, segundos: float = 2.0) -> float:
-    """RMS del ruido de fondo, a 16 kHz."""
+# Techo del umbral de voz. Habla normal a un palmo del micro mide RMS
+# 0.015-0.026 en esta máquina; un umbral por encima de eso no se dispara
+# nunca y la grabación se queda esperando a alguien que ya está hablando.
+# Pasó de verdad: una calibración devolvió 0.0425 y las tres grabaciones
+# salieron mudas.
+UMBRAL_MAXIMO = 0.012
+UMBRAL_MINIMO = 0.004
+
+
+@dataclass
+class Grabacion:
+    """Lo grabado y, sobre todo, si de verdad hay voz dentro."""
+
+    senal: np.ndarray
+    voz_detectada: bool
+    pico_bloque: float
+    umbral: float
+    avisos: set[str]
+
+    @property
+    def segundos(self) -> float:
+        return len(self.senal) / SAMPLE_RATE
+
+
+def medir_ruido(camino: Camino, segundos: float = 1.5) -> float:
+    """Nivel del ruido de fondo, en RMS por bloque.
+
+    Se usa la MEDIANA de los bloques, no el RMS del total: si durante la
+    calibración cae un golpe de teclado o una silla, el RMS global sube y
+    el umbral que sale de ahí ya no lo alcanza ninguna voz. La mediana ni
+    se entera.
+    """
     g = _Grabadora(camino)
     with g._flujo():  # noqa: SLF001
         time.sleep(segundos)
-    return rms(remuestrear(g._vaciar(), camino.tasa))  # noqa: SLF001
+    bloques = []
+    while not g.cola.empty():
+        b = g.cola.get().reshape(-1).astype(np.float32) / 32768.0
+        if b.size:
+            bloques.append(rms(b))
+    if not bloques:
+        return 0.0
+    return float(np.median(bloques))
+
+
+def umbral_de_voz(ruido: float) -> float:
+    """Umbral acotado por arriba y por abajo. Ver UMBRAL_MAXIMO."""
+    return float(min(max(ruido * 3.0, UMBRAL_MINIMO), UMBRAL_MAXIMO))
 
 
 def grabar_hasta_silencio(
@@ -164,19 +206,26 @@ def grabar_hasta_silencio(
     umbral: float,
     *,
     silencio_fin: float = 0.8,
-    espera_inicio: float = 6.0,
-    maximo: float = 12.0,
-) -> tuple[np.ndarray, set[str]]:
+    espera_inicio: float = 8.0,
+    maximo: float = 15.0,
+) -> Grabacion:
     """Graba hasta que el hablante se calla. Devuelve la señal a 16 kHz.
 
     El corte lo decide el silencio y no un cronómetro, que es el mismo
     criterio que usará NOVA en marcha: así, grabar sirve además para ver
     si el umbral está bien puesto para este micro y esta sala.
+
+    Devuelve SIEMPRE lo grabado, con `voz_detectada` diciendo si el
+    umbral llegó a dispararse. Antes, agotar la espera se reportaba como
+    grabación correcta: salían tres ficheros de exactamente 8 s, sin voz
+    dentro, marcados con un visto. Un fallo silencioso es peor que uno
+    ruidoso.
     """
     g = _Grabadora(camino)
     trozos: list[np.ndarray] = []
     hablando = False
     silencio = 0.0
+    pico_bloque = 0.0
     t0 = time.monotonic()
 
     with g._flujo():  # noqa: SLF001
@@ -188,7 +237,9 @@ def grabar_hasta_silencio(
             bloque = bruto.reshape(-1).astype(np.float32) / 32768.0
             trozos.append(bloque)
 
-            if rms(bloque) >= umbral:
+            nivel = rms(bloque)
+            pico_bloque = max(pico_bloque, nivel)
+            if nivel >= umbral:
                 hablando = True
                 silencio = 0.0
             elif hablando:
@@ -202,6 +253,15 @@ def grabar_hasta_silencio(
             if transcurrido > maximo:
                 break
 
-    if not trozos:
-        return np.zeros(0, dtype=np.float32), g.avisos
-    return remuestrear(np.concatenate(trozos), camino.tasa), g.avisos
+    senal = (
+        remuestrear(np.concatenate(trozos), camino.tasa)
+        if trozos
+        else np.zeros(0, dtype=np.float32)
+    )
+    return Grabacion(
+        senal=senal,
+        voz_detectada=hablando,
+        pico_bloque=pico_bloque,
+        umbral=umbral,
+        avisos=g.avisos,
+    )

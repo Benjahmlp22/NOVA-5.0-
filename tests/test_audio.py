@@ -208,3 +208,32 @@ def test_senal_muy_corta_no_revienta():
     from nova.voice.audio import fraccion_en_banda_de_voz
 
     assert fraccion_en_banda_de_voz(np.zeros(10, dtype=np.float32)) == 0.0
+
+
+# ── El umbral de voz no puede quedar por encima de la voz ────────────
+#
+# Pasó de verdad el 26/08: la calibración devolvió 0.0425 —por encima del
+# RMS de habla normal, 0.015-0.026— y las tres grabaciones salieron mudas
+# esperando a alguien que llevaba rato hablando.
+
+@pytest.mark.parametrize("ruido", [0.0, 0.0001, 0.002, 0.01, 0.05, 0.5])
+def test_umbral_siempre_por_debajo_del_habla(ruido):
+    from nova.voice.captura import UMBRAL_MAXIMO, umbral_de_voz
+
+    umbral = umbral_de_voz(ruido)
+    assert umbral <= UMBRAL_MAXIMO
+    # 0.015 es el RMS más bajo medido en habla normal en esta máquina.
+    assert umbral < 0.015
+
+
+def test_umbral_no_baja_del_suelo():
+    """En una sala muy callada, un umbral de casi cero lo dispara todo."""
+    from nova.voice.captura import UMBRAL_MINIMO, umbral_de_voz
+
+    assert umbral_de_voz(0.0) >= UMBRAL_MINIMO
+
+
+def test_umbral_sube_con_el_ruido_mientras_puede():
+    from nova.voice.captura import umbral_de_voz
+
+    assert umbral_de_voz(0.003) > umbral_de_voz(0.0005)

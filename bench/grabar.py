@@ -1,27 +1,27 @@
 """Graba las frases de `frases.txt` hablando, para medir el WER de verdad.
 
-    python bench/grabar.py
-    python bench/grabar.py --device 28        # el micro por WASAPI
-    python bench/grabar.py --desde 12         # seguir donde lo dejaste
+    python bench/grabar.py                       # el camino por defecto
+    python bench/grabar.py --device 28 --exclusivo
+    python bench/grabar.py --desde 12            # seguir donde lo dejaste
 
-Cada frase se guarda como `audio/NN_benja.wav`, que es lo que
-`bench_stt.py --sufijo benja` compara contra la línea NN de `frases.txt`.
+Antes de esto, corre `python bench/comparar_captura.py`: en Windows el
+mismo micrófono suena distinto por cada API, y grabar veinte frases por
+el camino equivocado ya nos costó un banco entero.
+
+Cada frase se guarda como `audio/NN_<sufijo>.wav`, que es lo que
+`bench_stt.py --sufijo <sufijo>` compara contra la línea NN de
+`frases.txt`.
 
 Habla como le hablas a NOVA de verdad: mismo sitio, mismo micro, misma
 distancia y sin vocalizar de más. Si grabas articulando como un locutor,
 el número que salga no describe tu uso real y la decisión que se tome con
 él será la equivocada.
-
-El corte de cada frase lo decide el silencio, no un cronómetro — es el
-mismo criterio que va a usar NOVA en la Fase 2, así que de paso se ve si
-el umbral está bien puesto para tu micro y tu sala.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-import time
 import wave
 from pathlib import Path
 
@@ -41,81 +41,19 @@ from nova.voice.audio import (  # noqa: E402
     fraccion_en_banda_de_voz,
     hay_senal,
     pico,
-    remuestrear,
     rms,
-    tasa_de_captura,
     tramo_hablado,
+)
+from nova.voice.captura import (  # noqa: E402
+    Camino,
+    caminos_para,
+    grabar_hasta_silencio,
+    medir_ruido,
+    umbral_de_voz,
 )
 
 FRASES = RAIZ / "frases.txt"
 DESTINO = RAIZ / "audio"
-
-BLOQUE_MS = 100         # tamaño de bloque en milisegundos
-SILENCIO_FIN = 0.8      # s de silencio que cierran la frase
-MAX_FRASE = 12.0        # tope duro, por si el umbral no salta nunca
-ESPERA_INICIO = 6.0     # s esperando a que empieces a hablar
-
-
-def _umbral(device: int | None, captura: int) -> float:
-    """Mide el ruido de fondo y pone el umbral por encima.
-
-    Un umbral fijo no vale: la misma cifra que en una habitación callada
-    corta a media palabra con un ventilador o un PC ruidoso al lado.
-    """
-    import sounddevice as sd
-
-    print("  Calibrando el ruido de fondo — no hables durante 2 s...")
-    fondo = sd.rec(int(2 * captura), samplerate=captura,
-                   channels=1, dtype="int16", device=device)
-    sd.wait()
-    senal = remuestrear(fondo.reshape(-1).astype(np.float32) / 32768.0, captura)
-    ruido = rms(senal)
-    # x4 sobre el ruido, con un suelo por si la sala está muy callada.
-    umbral = max(ruido * 4, 0.008)
-    print(f"  Ruido de fondo: RMS {ruido:.5f} → umbral de voz {umbral:.5f}\n")
-    return umbral
-
-
-def _grabar_frase(device: int | None, umbral: float, captura: int) -> np.ndarray:
-    """Graba hasta que te calles. Devuelve la frase entera, con margen.
-
-    Se captura a la tasa nativa del dispositivo y se baja a 16 kHz al
-    final, de una pasada: WASAPI en modo compartido no abre el micro a
-    otra tasa que la suya, y remuestrear nosotros es mejor que dejárselo
-    a PortAudio (ver `nova/voice/audio.py`).
-    """
-    import sounddevice as sd
-
-    bloque_n = int(captura * BLOQUE_MS / 1000)
-    trozos: list[np.ndarray] = []
-    hablando = False
-    silencio_seguido = 0.0
-    t0 = time.monotonic()
-
-    with sd.InputStream(samplerate=captura, blocksize=bloque_n, channels=1,
-                        dtype="int16", device=device) as flujo:
-        while True:
-            datos, _ = flujo.read(bloque_n)
-            bloque = datos.reshape(-1).astype(np.float32) / 32768.0
-            trozos.append(bloque)
-            duracion = time.monotonic() - t0
-
-            if rms(bloque) >= umbral:
-                hablando = True
-                silencio_seguido = 0.0
-            elif hablando:
-                silencio_seguido += BLOQUE_MS / 1000
-                if silencio_seguido >= SILENCIO_FIN:
-                    break
-
-            if not hablando and duracion > ESPERA_INICIO:
-                break
-            if duracion > MAX_FRASE:
-                break
-
-    if not trozos:
-        return np.zeros(0, dtype=np.float32)
-    return remuestrear(np.concatenate(trozos), captura)
 
 
 def _guardar(senal: np.ndarray, ruta: Path) -> None:
@@ -127,58 +65,87 @@ def _guardar(senal: np.ndarray, ruta: Path) -> None:
         w.writeframes(a_int16(senal))
 
 
+def _elegir_camino(args) -> Camino | None:  # noqa: ANN001
+    caminos = caminos_para(args.micro)
+    if not caminos:
+        return None
+    if args.device is None:
+        return caminos[0]
+    for c in caminos:
+        if c.device == args.device and c.exclusivo == args.exclusivo:
+            return c
+    print(f"! El dispositivo {args.device}"
+          f"{' en exclusivo' if args.exclusivo else ''} no se puede abrir. Disponibles:")
+    for c in caminos:
+        print(f"    device {c.device:3d}  {c.etiqueta}")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Graba el corpus de frases hablando.")
     p.add_argument("--device", type=int, default=None, help="índice del micro (ver nova.doctor)")
+    p.add_argument("--exclusivo", action="store_true", help="WASAPI exclusivo: sin efectos de Windows")
+    p.add_argument("--micro", default="", help="filtra por nombre, p.ej. G435")
     p.add_argument("--sufijo", default="benja")
     p.add_argument("--desde", type=int, default=1, help="empezar por la frase N")
     args = p.parse_args(argv)
 
+    camino = _elegir_camino(args)
+    if camino is None:
+        print("✗ No hay ningún camino de captura utilizable.")
+        return 1
+
     frases = [ln.strip() for ln in FRASES.read_text(encoding="utf-8").splitlines() if ln.strip()]
     DESTINO.mkdir(parents=True, exist_ok=True)
 
+    print(f"Camino: {camino.etiqueta} @ {camino.tasa} Hz → {SAMPLE_RATE} Hz")
     print(f"Voy a grabar {len(frases)} frases en {DESTINO}")
     print("Habla como le hablas a NOVA: mismo sitio, misma distancia, sin vocalizar de más.")
     print("Enter para grabar cada una · 'r' + Enter para repetir la anterior · 'q' para salir.\n")
 
-    captura = tasa_de_captura(args.device)
-    if captura != SAMPLE_RATE:
-        print(f"  Capturando a {captura} Hz y bajando a {SAMPLE_RATE} Hz aquí.")
-    umbral = _umbral(args.device, captura)
-    bandas: list[float] = []
+    ruido = medir_ruido(camino)
+    umbral = umbral_de_voz(ruido)
+    print(f"Ruido de fondo {ruido:.5f} → umbral de voz {umbral:.5f}\n")
 
+    bandas: list[float] = []
     i = max(1, args.desde)
     while i <= len(frases):
         frase = frases[i - 1]
         destino = DESTINO / f"{i:02d}_{args.sufijo}.wav"
         ya = " (ya grabada, se sobrescribe)" if destino.exists() else ""
-        orden = input(f"[{i:02d}/{len(frases)}] «{frase}»{ya}\n    Enter para grabar > ").strip().lower()
+        orden = input(
+            f"[{i:02d}/{len(frases)}] «{frase}»{ya}\n    Enter para grabar > "
+        ).strip().lower()
         if orden == "q":
             break
         if orden == "r":
             i = max(1, i - 1)
             continue
 
-        print("    grabando... (para cuando te calles)")
-        senal = _grabar_frase(args.device, umbral, captura)
+        print("    HABLA AHORA (corta sola cuando te calles)")
+        g = grabar_hasta_silencio(camino, umbral)
 
-        if not hay_senal(senal):
-            print("    ✗ silencio digital: el micro no entrega nada. Repite esta frase.\n")
+        if not hay_senal(g.senal):
+            print("    ✗ silencio digital: el micro no entrega nada. Repite.\n")
             continue
-        segundos = len(senal) / SAMPLE_RATE
-        if segundos < 0.4:
+        if not g.voz_detectada:
+            print(f"    ✗ no detecté voz en {g.segundos:.1f}s "
+                  f"(bloque más alto {g.pico_bloque:.5f} < umbral {umbral:.5f}). Repite.\n")
+            continue
+        if g.segundos < 0.4:
             print("    ! demasiado corta, seguramente se cortó. Repite.\n")
             continue
 
-        problema = diagnostico_de_voz(senal)
-        banda = fraccion_en_banda_de_voz(tramo_hablado(senal))
+        banda = fraccion_en_banda_de_voz(tramo_hablado(g.senal))
         bandas.append(banda)
-
-        _guardar(senal, destino)
-        print(f"    ✓ {segundos:.1f}s   RMS {rms(senal):.4f}   pico {pico(senal):.3f}"
+        _guardar(g.senal, destino)
+        print(f"    ✓ {g.segundos:.1f}s   RMS {rms(g.senal):.4f}   pico {pico(g.senal):.3f}"
               f"   voz {banda * 100:.0f}%   → {destino.name}")
+        problema = diagnostico_de_voz(g.senal)
         if problema:
             print(f"    ! {problema}")
+        if g.avisos:
+            print(f"    ! el driver avisó de {', '.join(g.avisos)} (muestras perdidas = cortes)")
         print()
         i += 1
 
@@ -196,8 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             print("    de la banda de voz: sale retumbe, no habla, y los")
             print("    reconocedores devolverán basura por mucho que el nivel")
             print("    parezca correcto.")
-            print("    Prueba otro dispositivo de la lista de `nova.doctor`: el")
-            print("    mismo micro por otra API de audio puede dar otra cosa.")
+            print("    Prueba otro camino:  python bench/comparar_captura.py")
             return 1
 
     if grabadas:

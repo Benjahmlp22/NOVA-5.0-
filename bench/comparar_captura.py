@@ -41,6 +41,7 @@ from nova.voice.captura import (  # noqa: E402
     caminos_para,
     grabar_hasta_silencio,
     medir_ruido,
+    umbral_de_voz,
 )
 
 DESTINO = RAIZ / "audio" / "comparacion"
@@ -81,28 +82,46 @@ def main(argv: list[str] | None = None) -> int:
 
     resultados = []
     for c in caminos:
-        input(f"[{c.etiqueta}]  Enter para calibrar el ruido y grabar > ")
-        try:
-            umbral = max(medir_ruido(c) * 4, 0.008)
-            print(f"    umbral {umbral:.5f} · habla ahora (corta cuando te calles)")
-            senal, avisos = grabar_hasta_silencio(c, umbral)
-        except Exception as exc:  # noqa: BLE001
-            print(f"    ✗ falló: {exc}\n")
-            continue
+        while True:
+            input(f"[{c.etiqueta}]  Enter, y di la frase cuando salga «habla ahora» > ")
+            try:
+                ruido = medir_ruido(c)
+                umbral = umbral_de_voz(ruido)
+                print(f"    ruido {ruido:.5f} · umbral {umbral:.5f} · HABLA AHORA")
+                g = grabar_hasta_silencio(c, umbral)
+            except Exception as exc:  # noqa: BLE001
+                print(f"    ✗ falló: {exc}\n")
+                break
 
-        if not hay_senal(senal):
-            print("    ✗ silencio digital, nada grabado\n")
-            continue
+            if not hay_senal(g.senal):
+                print("    ✗ silencio digital: este camino no entrega nada.\n")
+                break
 
-        ruta = DESTINO / _nombre_fichero(c)
-        _guardar(senal, ruta)
-        banda = fraccion_en_banda_de_voz(tramo_hablado(senal))
-        print(f"    ✓ {len(senal) / SAMPLE_RATE:.1f}s   RMS {rms(senal):.4f}   "
-              f"pico {pico(senal):.3f}   voz {banda * 100:.0f}%   → {ruta.name}")
-        if avisos:
-            print(f"    ! el driver avisó de {', '.join(avisos)} (muestras perdidas = cortes)")
-        print()
-        resultados.append((c, senal, banda, ruta))
+            # Un fichero de la duración máxima sin voz detectada es el
+            # fallo silencioso que ya nos costó tres grabaciones mudas.
+            if not g.voz_detectada:
+                print(f"    ✗ no detecté voz en {g.segundos:.1f}s "
+                      f"(bloque más alto {g.pico_bloque:.5f} < umbral {umbral:.5f})")
+                if g.pico_bloque < umbral / 3:
+                    print("      Casi no entró señal: ¿hablaste antes de «HABLA AHORA»,")
+                    print("      o este camino no está cogiendo el micro?")
+                else:
+                    print("      Estuvo cerca: habla algo más alto o más cerca del micro.")
+                if input("      ¿Repetir este camino? [S/n] > ").strip().lower() in ("", "s", "si", "sí"):
+                    continue
+                break
+
+            ruta = DESTINO / _nombre_fichero(c)
+            _guardar(g.senal, ruta)
+            banda = fraccion_en_banda_de_voz(tramo_hablado(g.senal))
+            print(f"    ✓ {g.segundos:.1f}s   RMS {rms(g.senal):.4f}   "
+                  f"pico {pico(g.senal):.3f}   voz {banda * 100:.0f}%   → {ruta.name}")
+            if g.avisos:
+                print(f"    ! el driver avisó de {', '.join(g.avisos)} "
+                      "(muestras perdidas = cortes)")
+            print()
+            resultados.append((c, g.senal, banda, ruta))
+            break
 
     if not resultados:
         print("No se grabó nada.")
