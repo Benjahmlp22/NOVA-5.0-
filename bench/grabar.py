@@ -33,18 +33,26 @@ if hasattr(sys.stdout, "reconfigure"):
 RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ.parent))
 
-from nova.voice.audio import SAMPLE_RATE, a_int16, hay_senal, pico, rms  # noqa: E402
+from nova.voice.audio import (  # noqa: E402
+    SAMPLE_RATE,
+    a_int16,
+    hay_senal,
+    pico,
+    remuestrear,
+    rms,
+    tasa_de_captura,
+)
 
 FRASES = RAIZ / "frases.txt"
 DESTINO = RAIZ / "audio"
 
-BLOQUE = 1600           # 100 ms
+BLOQUE_MS = 100         # tamaño de bloque en milisegundos
 SILENCIO_FIN = 0.8      # s de silencio que cierran la frase
 MAX_FRASE = 12.0        # tope duro, por si el umbral no salta nunca
 ESPERA_INICIO = 6.0     # s esperando a que empieces a hablar
 
 
-def _umbral(device: int | None) -> float:
+def _umbral(device: int | None, captura: int) -> float:
     """Mide el ruido de fondo y pone el umbral por encima.
 
     Un umbral fijo no vale: la misma cifra que en una habitación callada
@@ -53,10 +61,10 @@ def _umbral(device: int | None) -> float:
     import sounddevice as sd
 
     print("  Calibrando el ruido de fondo — no hables durante 2 s...")
-    fondo = sd.rec(int(2 * SAMPLE_RATE), samplerate=SAMPLE_RATE,
+    fondo = sd.rec(int(2 * captura), samplerate=captura,
                    channels=1, dtype="int16", device=device)
     sd.wait()
-    senal = fondo.reshape(-1).astype(np.float32) / 32768.0
+    senal = remuestrear(fondo.reshape(-1).astype(np.float32) / 32768.0, captura)
     ruido = rms(senal)
     # x4 sobre el ruido, con un suelo por si la sala está muy callada.
     umbral = max(ruido * 4, 0.008)
@@ -64,19 +72,26 @@ def _umbral(device: int | None) -> float:
     return umbral
 
 
-def _grabar_frase(device: int | None, umbral: float) -> np.ndarray:
-    """Graba hasta que te calles. Devuelve la frase entera, con margen."""
+def _grabar_frase(device: int | None, umbral: float, captura: int) -> np.ndarray:
+    """Graba hasta que te calles. Devuelve la frase entera, con margen.
+
+    Se captura a la tasa nativa del dispositivo y se baja a 16 kHz al
+    final, de una pasada: WASAPI en modo compartido no abre el micro a
+    otra tasa que la suya, y remuestrear nosotros es mejor que dejárselo
+    a PortAudio (ver `nova/voice/audio.py`).
+    """
     import sounddevice as sd
 
+    bloque_n = int(captura * BLOQUE_MS / 1000)
     trozos: list[np.ndarray] = []
     hablando = False
     silencio_seguido = 0.0
     t0 = time.monotonic()
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, blocksize=BLOQUE, channels=1,
+    with sd.InputStream(samplerate=captura, blocksize=bloque_n, channels=1,
                         dtype="int16", device=device) as flujo:
         while True:
-            datos, _ = flujo.read(BLOQUE)
+            datos, _ = flujo.read(bloque_n)
             bloque = datos.reshape(-1).astype(np.float32) / 32768.0
             trozos.append(bloque)
             duracion = time.monotonic() - t0
@@ -85,7 +100,7 @@ def _grabar_frase(device: int | None, umbral: float) -> np.ndarray:
                 hablando = True
                 silencio_seguido = 0.0
             elif hablando:
-                silencio_seguido += BLOQUE / SAMPLE_RATE
+                silencio_seguido += BLOQUE_MS / 1000
                 if silencio_seguido >= SILENCIO_FIN:
                     break
 
@@ -94,7 +109,9 @@ def _grabar_frase(device: int | None, umbral: float) -> np.ndarray:
             if duracion > MAX_FRASE:
                 break
 
-    return np.concatenate(trozos) if trozos else np.zeros(0, dtype=np.float32)
+    if not trozos:
+        return np.zeros(0, dtype=np.float32)
+    return remuestrear(np.concatenate(trozos), captura)
 
 
 def _guardar(senal: np.ndarray, ruta: Path) -> None:
@@ -120,7 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     print("Habla como le hablas a NOVA: mismo sitio, misma distancia, sin vocalizar de más.")
     print("Enter para grabar cada una · 'r' + Enter para repetir la anterior · 'q' para salir.\n")
 
-    umbral = _umbral(args.device)
+    captura = tasa_de_captura(args.device)
+    if captura != SAMPLE_RATE:
+        print(f"  Capturando a {captura} Hz y bajando a {SAMPLE_RATE} Hz aquí.")
+    umbral = _umbral(args.device, captura)
 
     i = max(1, args.desde)
     while i <= len(frases):
@@ -135,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         print("    grabando... (para cuando te calles)")
-        senal = _grabar_frase(args.device, umbral)
+        senal = _grabar_frase(args.device, umbral, captura)
 
         if not hay_senal(senal):
             print("    ✗ silencio digital: el micro no entrega nada. Repite esta frase.\n")

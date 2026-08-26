@@ -30,7 +30,16 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from .config import CONFIG  # noqa: E402
-from .voice.audio import SAMPLE_RATE, a_int16, hay_senal, normalizar, pico, rms  # noqa: E402
+from .voice.audio import (  # noqa: E402
+    SAMPLE_RATE,
+    a_int16,
+    hay_senal,
+    normalizar,
+    pico,
+    remuestrear,
+    rms,
+    tasa_de_captura,
+)
 
 BIEN, MAL, AVISO = "✓", "✗", "!"
 
@@ -115,18 +124,31 @@ def listar_dispositivos() -> None:
 # ── Grabación ────────────────────────────────────────────────────────
 
 def grabar(device: int | None, segundos: float):
+    """Graba a la tasa nativa del micro y baja a 16 kHz aquí.
+
+    WASAPI en modo compartido sólo abre el dispositivo a su propia tasa:
+    pedirle 16 kHz da "Invalid sample rate [PaErrorCode -9997]". MME sí
+    lo acepta, pero porque remuestrea PortAudio por dentro y con peor
+    calidad que nosotros — que es medio problema de los que estamos
+    intentando arreglar.
+    """
     import numpy as np
     import sounddevice as sd
+
+    captura = tasa_de_captura(device)
+    if captura != SAMPLE_RATE:
+        print(f"\n  Capturando a {captura} Hz → {SAMPLE_RATE} Hz (remuestreo nuestro).")
 
     print(f"\n  Grabando {segundos:.0f}s... habla ahora.")
     for queda in range(int(segundos), 0, -1):
         print(f"    {queda}...", end="\r", flush=True)
         time.sleep(1)
-    datos = sd.rec(int(segundos * SAMPLE_RATE), samplerate=SAMPLE_RATE,
+    datos = sd.rec(int(segundos * captura), samplerate=captura,
                    channels=1, dtype="int16", device=device)
     sd.wait()
     print("    listo.      ")
-    return (datos.reshape(-1).astype(np.float32) / 32768.0)
+    cruda = datos.reshape(-1).astype(np.float32) / 32768.0
+    return remuestrear(cruda, captura)
 
 
 def informar_nivel(senal) -> bool:

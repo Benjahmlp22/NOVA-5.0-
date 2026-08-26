@@ -77,3 +77,98 @@ def a_int16(senal: np.ndarray) -> bytes:
 def de_int16(datos: bytes) -> np.ndarray:
     """El camino de vuelta: bytes del micro → float32 [-1, 1]."""
     return np.frombuffer(datos, dtype="<i2").astype(np.float32) / 32768.0
+
+
+# ── Captura y remuestreo ─────────────────────────────────────────────
+#
+# WASAPI en modo compartido SÓLO abre el micro a su tasa nativa: pedirle
+# 16 kHz da "Invalid sample rate [PaErrorCode -9997]". MME y DirectSound
+# sí aceptan 16 kHz... porque remuestrean ellos por dentro, y ese es
+# justo el remuestreo de mala calidad del que queremos escapar.
+#
+# Así que se captura a la tasa del dispositivo y se baja aquí.
+
+
+def tasa_de_captura(device: int | None = None) -> int:
+    """A qué tasa se puede abrir de verdad ese micrófono.
+
+    Se prefiere la NATIVA aunque el driver acepte 16 kHz: bajar nosotros
+    con un filtro decente es mejor que dejárselo a PortAudio sobre MME.
+    """
+    import sounddevice as sd
+
+    indice = device if device is not None else sd.default.device[0]
+    info = sd.query_devices(indice, "input")
+    nativa = int(info["default_samplerate"])
+
+    for tasa in (nativa, SAMPLE_RATE):
+        try:
+            sd.check_input_settings(device=device, samplerate=tasa, channels=1, dtype="int16")
+            return tasa
+        except Exception:  # noqa: BLE001 — cualquier fallo significa "esta no"
+            continue
+    return nativa
+
+
+def _fir_paso_bajo(corte: float, taps: int) -> np.ndarray:
+    """Sinc enventanado con Hamming. `corte` va normalizado a la tasa de origen."""
+    n = np.arange(taps) - (taps - 1) / 2
+    h = np.sinc(2 * corte * n) * np.hamming(taps)
+    return (h / h.sum()).astype(np.float32)
+
+
+def _decimar(senal: np.ndarray, factor: int) -> np.ndarray:
+    """Baja por un factor entero, filtrando antes.
+
+    Sin el filtro, todo lo que hay por encima de la nueva Nyquist se
+    dobla hacia abajo y aparece como ruido tonal en mitad de la voz. Es
+    el error clásico de "coger una muestra de cada tres", y hace más daño
+    en la consonante — la /s/ y la /f/ viven donde más alias hay — que
+    es justo lo que el reconocedor necesita para distinguir palabras.
+    """
+    # Corte al 90% de la nueva Nyquist: deja sitio a la caída del filtro.
+    h = _fir_paso_bajo(0.45 / factor, taps=32 * factor + 1)
+    filtrada = np.convolve(senal, h, mode="same")
+    return filtrada[::factor].astype(np.float32)
+
+
+def _remuestrear_pyav(senal: np.ndarray, origen: int, destino: int) -> np.ndarray:
+    """Para relaciones no enteras (44100 → 16000), con el resampler de PyAV."""
+    import av
+
+    marco = av.AudioFrame.from_ndarray(
+        (np.clip(senal, -1, 1) * 32767).astype("<i2").reshape(1, -1),
+        format="s16",
+        layout="mono",
+    )
+    marco.sample_rate = origen
+    remuestreador = av.audio.resampler.AudioResampler(
+        format="s16", layout="mono", rate=destino
+    )
+    trozos = [s.to_ndarray().reshape(-1) for s in remuestreador.resample(marco)]
+    # Vaciar el búfer interno o se pierde la última fracción de segundo.
+    trozos += [s.to_ndarray().reshape(-1) for s in remuestreador.resample(None)]
+    if not trozos:
+        return np.zeros(0, dtype=np.float32)
+    return (np.concatenate(trozos).astype(np.float32) / 32768.0)
+
+
+def remuestrear(senal: np.ndarray, origen: int, destino: int = SAMPLE_RATE) -> np.ndarray:
+    """Lleva la señal a `destino` Hz. 48000 → 16000 no necesita PyAV."""
+    if origen == destino or senal.size == 0:
+        return senal.astype(np.float32)
+    if origen % destino == 0:
+        return _decimar(senal, origen // destino)
+    try:
+        return _remuestrear_pyav(senal, origen, destino)
+    except ImportError:
+        # Último recurso: interpolación lineal. Mete alias, pero es
+        # preferible a no oír nada. Se avisa porque explica un WER raro.
+        log.warning(
+            "sin PyAV para remuestrear %d→%d Hz: uso interpolación lineal (peor calidad)",
+            origen, destino,
+        )
+        n = int(round(senal.size * destino / origen))
+        origen_x = np.linspace(0, senal.size - 1, senal.size)
+        destino_x = np.linspace(0, senal.size - 1, n)
+        return np.interp(destino_x, origen_x, senal).astype(np.float32)
