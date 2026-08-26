@@ -36,7 +36,7 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | `python -m nova.doctor` | **hecho** |
 | Banco de pruebas WER + grabador de corpus | **hecho** |
 | Pre-roll, VAD y unmute sin perder el principio | **hecho** |
-| Panel abajo a la derecha | pendiente |
+| Panel abajo a la derecha | **hecho** |
 | Búsqueda en internet | **hecho** |
 | Presupuesto de RAM/VRAM medido | **hecho** |
 | Latencia punta a punta < 1,5 s | **NO** — ver su sección |
@@ -163,6 +163,60 @@ sintético sirvió para lo que tenía que servir —comprobar que
 faster-whisper funciona en la 3060 sin necesitar micrófono— y **su
 conclusión sobre qué modelo usar era falsa**.
 
+## El panel
+
+Abajo a la derecha, arrastrable por toda la pantalla, y **recuerda dónde
+lo dejaste** entre sesiones (`data/ui.json`). Se colapsa al orbe de 62 px
+con el guion de la esquina, y vuelve con un clic en el orbe — el orbe de
+NOVA4 no se tiró: es el estado minimizado.
+
+Dentro, en orden de importancia:
+
+**La onda va con la amplitud real del audio.** Nada de `sin()`
+decorativo. Escuchando, el nivel viene del micrófono; hablando, del audio
+que está sonando. Eso último obligó a cambiar cómo habla NOVA: SAPI no
+expone su búfer, así que ahora se le pide el audio (`save_to_file`) y lo
+reproduce NOVA con sounddevice, midiendo el nivel bloque a bloque.
+
+Salió mejor de lo esperado, porque sintetizar va ~9× más rápido que el
+tiempo real:
+
+| | antes de la primera sílaba |
+|---|---|
+| `runAndWait()` de SAPI (NOVA4) | ~1.40 s |
+| sintetizar + reproducir (NOVA5) | **0.67 s** |
+
+Y de paso interrumpir dejó de ser una súplica: se corta el flujo de
+audio, que es inmediato, en vez de pedirle a SAPI que pare.
+
+**Subtítulos.** Lo que NOVA entendió y lo que respondió. Con
+reconocimiento de voz, ver la transcripción es la forma más rápida de
+saber si te entendió mal, antes de que haga algo raro.
+
+**Barra de actividad.** Las últimas cuatro acciones, con color por tipo:
+abrir en verde, cerrar en rojo, buscar en azul, archivos en violeta,
+memoria en amarillo. De reojo, en una barra pequeña, el color es lo único
+que se lee — y abrir Discord no puede parecer lo mismo que cerrarlo.
+
+**Un color por estado, y hablar tiene el suyo.** La distancia se mide en
+TONO y no en RGB: el primer verde menta que probé se quedaba a 40° del
+azul de escuchar y en pantalla no se distinguía. El verde de ahora está
+a 81°.
+
+| estado | color | |
+|---|---|---|
+| preparando | `#607694` | azul apagado: va a estar, aún no está |
+| dormida | `#96989e` | gris |
+| te escucho | `#4da3ff` | azul |
+| pensando | `#f0f0f2` | blanco |
+| hablando | `#4cd964` | verde |
+| error | `#e8613c` | ámbar rojizo |
+
+Sigue siendo PyQt5, sin marco, siempre encima, fuera del Alt+Tab
+(`Qt.Tool`) y con `WA_ShowWithoutActivating`: **no roba el foco**.
+Comprobado con una partida a pantalla completa delante — el panel se ve
+encima y el juego no se entera.
+
 ## Latencia de punta a punta: el objetivo NO se cumple
 
 Se fijó como criterio "menos de 1,5 s desde que dejas de hablar hasta la
@@ -174,25 +228,20 @@ primera sílaba de NOVA". **No se cumple, y no está cerca.** Medido el
 | detectar que has terminado de hablar (silencio) | 0.70 s |
 | etapa 2: Whisper `medium` en la 3060 | 0.50 – 0.84 s |
 | cerebro: Ollama `qwen3.5:4b` + herramientas | 0.33 – 2.66 s |
-| arrancar el motor SAPI y empezar a sonar | ~1.40 s |
-| **total** | **≈ 3 – 5.6 s** |
+| sintetizar la voz y empezar a sonar | 0.67 s |
+| **total** | **≈ 2.2 – 4.9 s** |
 
 Dónde está el margen, en orden de lo que más devuelve:
 
-**El motor de TTS (1.4 s).** Se crea uno nuevo por frase, y hay un motivo
-—reutilizarlo hace que sólo suene la primera, ver `voice/speaker.py`—
-pero el motor se puede tener creado y esperando en vez de construirlo
-cuando ya hay algo que decir.
+**El cerebro, esperando la respuesta entera (hasta 2.66 s).** Es el
+tramo más gordo y el que más se notaría: con la respuesta en streaming se
+podría arrancar el TTS con la primera frase en vez de esperar al punto
+final.
 
 **El silencio (0.7 s).** Bajarlo es gratis en trabajo y caro en calidad:
 por debajo de ~0.5 s corta a mitad de frase, porque una coma ya da 0.4 s
 de pausa. Es un `NOVA_SILENCIO_FIN` en el `.env` para quien quiera
 probarlo.
-
-**El cerebro (hasta 2.66 s).** Ahora mismo se espera a la respuesta
-entera antes de empezar a hablar. Con la respuesta en streaming se
-podría arrancar el TTS con la primera frase, que es donde está el grueso
-de la mejora percibida.
 
 **Whisper (0.5-0.84 s).** Bajar a `small` lo deja en ~0.3 s a cambio de
 casi triplicar el error (9.3 % contra 3.5 %). Mal negocio.

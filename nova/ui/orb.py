@@ -16,25 +16,19 @@ from __future__ import annotations
 
 import math
 
-from PyQt5.QtCore import QPoint, Qt, QTimer
+from PyQt5.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QMenu, QWidget
+
+from .panel import COLORES as _PALETA
 
 TAMANO = 62
 _BARRAS = 3
 
-_COLORES = {
-    # "preparando" NO puede parecerse a "dormida": durante la carga del
-    # modelo de voz NOVA todavía no oye, y en NOVA4 esa diferencia no se
-    # veía por ningún sitio. Azul apagado — misma familia que "escucha",
-    # pero sin brillo: se lee como "va a estar, aún no está".
-    "preparando": QColor(96, 118, 148),
-    "dormida": QColor(150, 152, 158),
-    "escucha": QColor(77, 163, 255),
-    "pensando": QColor(240, 240, 242),
-    "hablando": QColor(255, 255, 255),
-    "apagada": QColor(90, 92, 98),
-}
+# La paleta la manda el panel: dos tablas de color para los mismos
+# estados se desincronizan en cuanto alguien toca una.
+_COLORES = _PALETA
+
 _VELOCIDAD = {
     "preparando": 0.12,
     "dormida": 0.045,
@@ -46,10 +40,13 @@ _VELOCIDAD = {
 
 
 class Orb(QWidget):
+    expandir = pyqtSignal()
+
     def __init__(self, on_quit=None, on_toggle_mute=None) -> None:  # noqa: ANN001
         super().__init__()
         self._estado = "apagada"
         self._fase = 0.0
+        self._nivel = 0.0
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
@@ -62,7 +59,7 @@ class Orb(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFixedSize(TAMANO, TAMANO)
-        self.setToolTip('NOVA — di "NOVA". Arrastra para mover, clic derecho para opciones.')
+        self.setToolTip('NOVA — di "NOVA". Clic para desplegar, arrastra para mover.')
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -74,6 +71,15 @@ class Orb(QWidget):
         if estado != self._estado:
             self._estado = estado
             self.update()
+
+    def set_nivel(self, nivel: float) -> None:
+        """Nivel real del audio, igual que en el panel.
+
+        Colapsado se ve menos, pero tiene que seguir diciendo la verdad:
+        una barra que se mueve sola cuando no hay sonido es exactamente
+        lo que había que quitar.
+        """
+        self._nivel = max(0.0, min(1.0, float(nivel)))
 
     def colocar(self, esquina: str = "bottom-left", margen: int = 16) -> None:
         pantalla = self.screen().availableGeometry()
@@ -91,6 +97,8 @@ class Orb(QWidget):
         vel = _VELOCIDAD.get(self._estado, 0.0)
         if vel:
             self._fase += vel
+        self._nivel *= 0.82
+        if vel or self._nivel > 0.001:
             self.update()
 
     def paintEvent(self, event) -> None:  # noqa: ANN001, N802
@@ -124,7 +132,14 @@ class Orb(QWidget):
         for i in range(_BARRAS):
             if self._estado in ("dormida", "apagada"):
                 alto = 6 + (2 * math.sin(self._fase + i * 0.9) if self._estado == "dormida" else 0)
+            elif self._estado in ("escucha", "hablando"):
+                # Amplitud REAL. La raíz cuadrada porque el RMS de la voz
+                # vive en la parte baja del rango y en lineal la barra
+                # casi no se movería.
+                alto = 6 + 13 * min(1.0, (self._nivel ** 0.5) * 1.6)
             else:
+                # "pensando" no tiene audio que enseñar, así que aquí sí
+                # toca una animación: es un latido, no una mentira.
                 alto = 8 + 11 * abs(math.sin(self._fase + i * 0.55))
             x = x0 + i * (ancho + hueco)
             p.drawRoundedRect(int(x), int(centro - alto / 2), ancho, int(alto), 2, 2)
@@ -134,15 +149,23 @@ class Orb(QWidget):
     def mousePressEvent(self, e) -> None:  # noqa: ANN001, N802
         if e.button() == Qt.LeftButton:
             self._arrastre = e.globalPos() - self.frameGeometry().topLeft()
+            self._movido = False
             e.accept()
 
     def mouseMoveEvent(self, e) -> None:  # noqa: ANN001, N802
         if self._arrastre is not None and e.buttons() & Qt.LeftButton:
             self.move(e.globalPos() - self._arrastre)
+            self._movido = True
             e.accept()
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: ANN001, N802
+        # Un clic que no arrastró es un clic: despliega el panel. Si se
+        # expandiera también al soltar tras mover, arrastrar el orbe
+        # abriría el panel cada vez.
+        if self._arrastre is not None and not getattr(self, "_movido", False):
+            self.expandir.emit()
         self._arrastre = None
+        self._movido = False
 
     def contextMenuEvent(self, e) -> None:  # noqa: ANN001, N802
         menu = QMenu()

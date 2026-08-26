@@ -54,6 +54,21 @@ _RECUERDA = re.compile(
 )
 
 
+def _dato_visible(argumentos: dict) -> str:
+    """El argumento que el usuario reconocería al verlo en la interfaz.
+
+    "Abriendo Discord" dice mucho más que "app.open", y el único sitio
+    donde está ese "Discord" es en los argumentos de la llamada.
+    """
+    if not isinstance(argumentos, dict):
+        return ""
+    for clave in ("name", "query", "path", "url", "text", "command"):
+        valor = argumentos.get(clave)
+        if isinstance(valor, str) and valor.strip():
+            return valor.strip()
+    return ""
+
+
 def _extraer_recuerdo(mensaje: str) -> str:
     m = _RECUERDA.match(mensaje or "")
     if not m:
@@ -80,14 +95,15 @@ class Agent:
         tools: ToolRegistry,
         *,
         max_rounds: int = 4,
-        on_status: Callable[[str, str], None] | None = None,
+        on_status: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.llm = llm
         self.tools = tools
         self.max_rounds = max_rounds
-        # Callback (etapa, detalle) para que la UI muestre "pensando",
-        # "ejecutando captura", etc. sin que el agente sepa de Qt.
-        self._on_status = on_status or (lambda stage, detail: None)
+        # Callback (etapa, herramienta, dato) para que la UI pueda
+        # enseñar "Abriendo Discord" y no sólo "app.open", sin que el
+        # agente sepa nada de Qt.
+        self._on_status = on_status or (lambda etapa, herramienta, dato: None)
 
     def run(
         self,
@@ -146,7 +162,7 @@ class Agent:
                     messages.append(self._tool_msg(call.name, f"No existe la herramienta {call.name}."))
                     continue
 
-                self._status("tool", tool.name)
+                self._status("tool", tool.name, _dato_visible(call.args))
                 outcome = self.tools.execute(tool.name, call.args)
 
                 if isinstance(outcome, PendingConfirmation):
@@ -183,7 +199,7 @@ class Agent:
 
     def confirm(self, pending: PendingConfirmation) -> ToolResult:
         """Ejecuta lo que quedó pendiente tras el 'sí' del usuario."""
-        self._status("tool", pending.tool)
+        self._status("tool", pending.tool, _dato_visible(pending.args))
         outcome = self.tools.execute(pending.tool, pending.args, confirmed=True)
         if isinstance(outcome, PendingConfirmation):  # no debería pasar
             return ToolResult(ok=False, message="La confirmación no se aplicó.")
@@ -195,8 +211,8 @@ class Agent:
     def _tool_msg(name: str, content: str) -> dict[str, Any]:
         return {"role": "tool", "name": name, "content": content}
 
-    def _status(self, stage: str, detail: str = "") -> None:
+    def _status(self, etapa: str, herramienta: str = "", dato: str = "") -> None:
         try:
-            self._on_status(stage, detail)
+            self._on_status(etapa, herramienta, dato)
         except Exception:
             log.debug("callback de estado falló", exc_info=True)

@@ -173,7 +173,11 @@ class Config:
     confirm_policy: str = field(default_factory=lambda: _env("NOVA_CONFIRM", "solo_peligroso"))
 
     # ── Interfaz ─────────────────────────────────────────────────────
-    orb_corner: str = field(default_factory=lambda: _env("NOVA_ORB_CORNER", "bottom-left"))
+    # Abajo a la DERECHA. NOVA4 la ponía a la izquierda, donde se pisa
+    # con la barra de tareas de quien la tiene ahí y con el menú inicio.
+    # Sólo vale la primera vez: a partir de ahí manda dónde la dejaste
+    # (`data/ui.json`).
+    orb_corner: str = field(default_factory=lambda: _env("NOVA_ORB_CORNER", "bottom-right"))
     glow_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_GLOW", True))
 
     # ── Rutas ────────────────────────────────────────────────────────

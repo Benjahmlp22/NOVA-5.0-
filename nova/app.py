@@ -45,7 +45,7 @@ from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
 from .tools import PendingConfirmation, build_registry, memory
-from .ui import GlowBorder, Orb
+from .ui import Interfaz
 from .voice import Speaker, Transcriptor, VoiceListener, play_chime
 
 log = logging.getLogger("nova.app")
@@ -85,7 +85,7 @@ class _Worker(QObject):
 
     listo = pyqtSignal(str, list)          # texto, herramientas usadas
     pendiente = pyqtSignal(object)          # PendingConfirmation
-    estado = pyqtSignal(str, str)           # etapa, detalle
+    estado = pyqtSignal(str, str, str)      # etapa, herramienta, dato
 
     def __init__(self, agent: Agent, conv: Conversation, awareness: Awareness) -> None:
         super().__init__()
@@ -132,6 +132,9 @@ class Nova(QObject):
     _voz_escuchando = pyqtSignal()
     _habla_inicio = pyqtSignal()
     _habla_fin = pyqtSignal()
+    # El nivel llega desde el hilo de audio y desde el de TTS, ~30 veces
+    # por segundo. Como todo lo que cruza hilos aquí, va por señal.
+    _nivel = pyqtSignal(float)
 
     def __init__(self, app: QApplication, transcriptor: Transcriptor | None = None) -> None:
         super().__init__()
@@ -154,12 +157,14 @@ class Nova(QObject):
             self.llm,
             self.tools,
             max_rounds=CONFIG.max_rounds,
-            on_status=lambda etapa, detalle: self._worker.estado.emit(etapa, detalle),
+            on_status=lambda etapa, herramienta, dato: (
+                self._worker.estado.emit(etapa, herramienta, dato)
+            ),
         )
 
         # ── Interfaz ─────────────────────────────────────────────────
-        self.orb = Orb(on_quit=self.salir, on_toggle_mute=self.alternar_voz)
-        self.glow = GlowBorder()
+        self.ui = Interfaz(on_quit=self.salir, on_toggle_mute=self.alternar_voz)
+        self.glow = self.ui.glow
 
         # ── Voz ──────────────────────────────────────────────────────
         # Los callbacks emiten señales (ver arriba) en vez de llamar a
@@ -170,6 +175,7 @@ class Nova(QObject):
             enabled=CONFIG.tts_enabled,
             on_start=self._habla_inicio.emit,
             on_end=self._habla_fin.emit,
+            on_nivel=self._nivel.emit,
         )
         # Etapa 2: entiende la orden Y confirma que el nombre estaba de
         # verdad. Llega ya cargado desde `run()`, antes de que existiera
@@ -196,6 +202,7 @@ class Nova(QObject):
             on_ready=self._voz_lista.emit,
             on_error=self._voz_error.emit,
             on_escuchando=self._voz_escuchando.emit,
+            on_nivel=self._nivel.emit,
         )
         self._voz_despierta.connect(self._al_despertar)
         self._voz_comando.connect(self._al_comando)
@@ -203,6 +210,7 @@ class Nova(QObject):
         self._voz_lista.connect(self._al_voz_lista)
         self._voz_error.connect(self._al_voz_error)
         self._voz_escuchando.connect(self._al_voz_escuchando)
+        self._nivel.connect(self.ui.set_nivel)
         self._habla_inicio.connect(self._hablando_inicio)
         self._habla_fin.connect(self._hablando_fin)
 
@@ -227,8 +235,7 @@ class Nova(QObject):
         self.awareness.start()
         self.speaker.start()
 
-        self.orb.colocar(CONFIG.orb_corner)
-        self.orb.show()
+        self.ui.mostrar()
 
         if not self.llm.available():
             log.warning("Ollama no responde en %s", CONFIG.ollama_url)
@@ -243,12 +250,12 @@ class Nova(QObject):
         # start() ya no bloquea, así que aquí NOVA todavía no oye nada:
         # decir "dormida" en este punto sería mentirle al usuario durante
         # los segundos que tarde la carga (42 s medidos con el es-0.42).
-        self.orb.set_estado("preparando")
+        self.ui.set_estado("preparando")
         if not self.listener.start():
             self._al_voz_error(self.listener.error)
 
     def _al_voz_lista(self) -> None:
-        self.orb.set_estado("dormida")
+        self.ui.set_estado("dormida")
         log.info("NOVA lista (%s). Di «%s».", self.transcriptor.motor, CONFIG.wake_word)
 
     def _al_voz_escuchando(self) -> None:
@@ -260,10 +267,10 @@ class Nova(QObject):
         resulta que era "no va".
         """
         if not self._ocupada:
-            self.orb.set_estado("escucha")
+            self.ui.set_estado("escucha")
 
     def _al_voz_error(self, mensaje: str) -> None:
-        self.orb.set_estado("apagada")
+        self.ui.set_estado("apagada")
         log.error("Voz no disponible: %s", mensaje)
         self._decir(f"Voz no disponible: {mensaje}", estado="apagada", hablar=False)
 
@@ -290,6 +297,7 @@ class Nova(QObject):
 
     def salir(self) -> None:
         log.info("cerrando NOVA")
+        self.ui.cerrar()
         self.listener.stop()
         self.speaker.stop()
         self.awareness.stop()
@@ -317,7 +325,7 @@ class Nova(QObject):
             self.speaker.shut_up()
         if CONFIG.chime_enabled:
             play_chime()
-        self.orb.set_estado("escucha")
+        self.ui.set_estado("escucha")
         if CONFIG.glow_enabled:
             self.glow.encender()
 
@@ -331,13 +339,15 @@ class Nova(QObject):
 
     def _al_comando(self, texto: str) -> None:
         self.glow.apagar()
+        self.ui.set_dicho(texto)
+        self.ui.set_respondido("")
 
         # ¿Está contestando a una confirmación pendiente?
         if self._pendiente is not None:
             primera = texto.strip().lower().split()[:1]
             if primera and primera[0].strip(".,!¡") in _AFIRMA:
                 pendiente, self._pendiente = self._pendiente, None
-                self.orb.set_estado("pensando")
+                self.ui.set_estado("pensando")
                 self._ocupada = True
                 self._confirmar.emit(pendiente)
                 return
@@ -345,14 +355,14 @@ class Nova(QObject):
             self._decir("Vale, lo dejo.")
             return
 
-        self.orb.set_estado("pensando")
+        self.ui.set_estado("pensando")
         self._ocupada = True
         self._procesar.emit(texto)
 
     def _al_dormir(self, motivo: str) -> None:
         self.glow.apagar()
         if not self._ocupada:
-            self.orb.set_estado("dormida")
+            self.ui.set_estado("dormida")
         if motivo == "despedida":
             import random
 
@@ -360,8 +370,10 @@ class Nova(QObject):
 
     # ── Eventos del cerebro (llegan del hilo de trabajo) ─────────────
 
-    def _al_estado(self, etapa: str, detalle: str) -> None:
-        self.orb.set_estado("pensando")
+    def _al_estado(self, etapa: str, herramienta: str, dato: str) -> None:
+        self.ui.set_estado("pensando")
+        if etapa == "tool" and herramienta:
+            self.ui.accion(herramienta, dato)
 
     def _al_responder(self, texto: str, herramientas: list) -> None:
         self._ocupada = False
@@ -389,6 +401,7 @@ class Nova(QObject):
         frases" del prompt y 200 caracteres son 12 s hablando con el
         micrófono mudo (ver `polish.recortar_para_voz`).
         """
+        self.ui.set_respondido(texto)
         if va_a_sonar(
             hablar=hablar,
             silenciada=self._voz_silenciada,
@@ -404,20 +417,20 @@ class Nova(QObject):
     def _reposo(self, estado: str = "") -> None:
         """Deja orbe y glow como toca cuando NOVA deja de hablar."""
         if estado:
-            self.orb.set_estado(estado)
+            self.ui.set_estado(estado)
             return
         siguiente = estado_en_reposo(ocupada=self._ocupada, despierta=self.listener.awake)
         if siguiente == "escucha" and CONFIG.glow_enabled:
             # La conversación sigue abierta: se nota en el glow que no
             # hace falta repetir "NOVA" para el siguiente turno.
             self.glow.encender()
-        self.orb.set_estado(siguiente)
+        self.ui.set_estado(siguiente)
 
     def _hablando_inicio(self) -> None:
         # Mientras NOVA habla, el micrófono se ignora: si no, se oye a sí
         # misma y se despierta sola en bucle.
         self.listener.mute()
-        self.orb.set_estado("hablando")
+        self.ui.set_estado("hablando")
 
     def _hablando_fin(self) -> None:
         self.listener.unmute()

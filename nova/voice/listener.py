@@ -110,6 +110,7 @@ class VoiceListener:
         on_ready: Callable[[], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         on_escuchando: Callable[[], None] | None = None,
+        on_nivel: Callable[[float], None] | None = None,
     ) -> None:
         self.wake_word = normalizar_texto(wake_word)
         self.detector = detector or DetectorWake(wake_model, self.wake_word)
@@ -129,6 +130,8 @@ class VoiceListener:
         self._on_ready = on_ready or (lambda: None)
         self._on_error = on_error or (lambda m: None)
         self._on_escuchando = on_escuchando or (lambda: None)
+        # Nivel real del micro, para que la onda del panel no mienta.
+        self._on_nivel = on_nivel or (lambda nivel: None)
 
         self._awake = False
         self._running = False
@@ -325,6 +328,7 @@ class VoiceListener:
                     self.sleep_now("silencio")
 
                 nivel = rms(bloque)
+                self._on_nivel(nivel)
                 if self._awake:
                     # Conversación continua: cualquier voz abre enunciado,
                     # sin repetir el nombre.
@@ -364,7 +368,9 @@ class VoiceListener:
             self._preroll.append(bloque)
             trozos.append(bloque)
 
-            if rms(bloque) >= self._umbral:
+            nivel = rms(bloque)
+            self._on_nivel(nivel)
+            if nivel >= self._umbral:
                 silencio = 0.0
             else:
                 silencio += BLOQUE_MS / 1000

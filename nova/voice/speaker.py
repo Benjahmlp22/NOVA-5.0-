@@ -2,37 +2,57 @@
 
 Cero coste, cero internet, cero API key.
 
-Detalle importante: pyttsx3 no es seguro entre hilos y su `runAndWait()`
-bloquea.  Por eso vive en su propio hilo con una cola, y "interrumpir"
-significa parar el motor y vaciar lo pendiente — que es justo lo que
-hace falta cuando el usuario vuelve a decir "NOVA" mientras habla.
+**NOVA5 no deja hablar a SAPI: le pide el audio y lo reproduce ella.**
+`save_to_file` + reproducción propia con sounddevice, en vez de
+`runAndWait()`.  Suena raro hasta que se miran los números, medidos el
+26/08 con la voz Sabina:
 
-Otro detalle, más raro y confirmado en directo: un mismo motor de
-pyttsx3/SAPI5 solo habla de verdad la PRIMERA vez que se le pide
-`runAndWait()` — a partir de la segunda, la llamada vuelve casi al
-instante sin sonar nada (bug conocido del driver sapi5, no nuestro).
-Por eso aquí se crea un motor nuevo para CADA frase en vez de reusar
-uno solo durante toda la vida del hilo.
+    frase de 73 caracteres → 4.89 s de audio
+    sintetizarla a WAV:      0.16 - 0.47 s
+    hablarla con runAndWait: ~1.4 s antes de la primera sílaba
 
-Y la trampa dentro de la trampa: `pyttsx3.init()` NO crea un motor
-nuevo — devuelve el mismo de antes mientras alguien conserve una
-referencia viva al anterior (cachea con weakrefs). Como `self._engine`
-siempre apunta al último, `init()` devolvía eternamente el motor ya
-mudo. Se instancia `Engine()` directamente para saltarse esa caché.
+Tres cosas se arreglan de una vez:
+
+**La forma de onda puede ser real.**  Teniendo las muestras, el nivel que
+pinta el panel es el del audio que está sonando, no un `sin()` decorativo
+que finge estar vivo.  Era un requisito explícito y no había otra forma:
+SAPI no expone su búfer.
+
+**Un segundo menos de latencia.**  Sintetizar va ~9x más rápido que el
+tiempo real, así que se empieza a oír antes.
+
+**Interrumpir deja de ser una súplica.**  Antes se le pedía a SAPI que
+parase; ahora se corta el flujo de audio, que es inmediato y no depende
+de que el driver haga caso.
+
+Queda de NOVA4 la razón para crear un motor nuevo por frase: un mismo
+motor de pyttsx3/SAPI5 sólo funciona la PRIMERA vez, y `pyttsx3.init()`
+NO crea uno nuevo — devuelve el anterior mientras alguien conserve una
+referencia viva (cachea con weakrefs).  Por eso se instancia `Engine()`
+directamente.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
+import tempfile
 import threading
 import time
+import wave
 from collections.abc import Callable
+
+import numpy as np
 
 log = logging.getLogger("nova.voice.speaker")
 
 _STOP = object()  # centinela de apagado
+
+# Bloque de reproducción. 30 ms da ~33 medidas de nivel por segundo, que
+# es más de lo que el ojo distingue en una onda y no carga nada.
+BLOQUE_MS = 30
 
 
 def limpiar_para_voz(texto: str) -> str:
@@ -54,14 +74,16 @@ class Speaker:
         enabled: bool = True,
         on_start: Callable[[], None] | None = None,
         on_end: Callable[[], None] | None = None,
+        on_nivel: Callable[[float], None] | None = None,
     ) -> None:
         self.enabled = enabled
         self.rate = rate
         self._on_start = on_start or (lambda: None)
         self._on_end = on_end or (lambda: None)
+        # Nivel real del audio que suena ahora mismo, 0.0-1.0.
+        self._on_nivel = on_nivel or (lambda nivel: None)
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
-        self._engine = None
         self._speaking = threading.Event()
         self._interrupt = threading.Event()
         self._voz_confirmada = False
@@ -108,31 +130,22 @@ class Speaker:
             log.info("nada que decir tras limpiar: %r", texto)
 
     def shut_up(self) -> None:
-        """Corta lo que esté diciendo y descarta lo pendiente."""
+        """Corta lo que esté diciendo y descarta lo pendiente.
+
+        Cortar es inmediato: el bucle de reproducción mira este flag en
+        cada bloque de 30 ms. En NOVA4 había que pedirle a SAPI que
+        parara y esperar a que hiciera caso.
+        """
         self._interrupt.set()
         while True:
             try:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
-        if self._engine is not None:
-            try:
-                self._engine.stop()
-            except Exception:
-                log.debug("no pude parar el motor de voz", exc_info=True)
 
     # ── Hilo ─────────────────────────────────────────────────────────
 
     def _run(self) -> None:
-        try:
-            motor_prueba = self._crear_motor()
-            del motor_prueba
-        except Exception as exc:
-            self.error = f"No pude iniciar la voz: {exc}"
-            log.exception(self.error)
-            self.enabled = False
-            return
-
         while True:
             item = self._queue.get()
             if item is _STOP:
@@ -140,10 +153,6 @@ class Speaker:
 
             # `shut_up()` vacía la cola, pero esta frase ya salió de ella:
             # está en la mano de este hilo y la cola no la puede tocar.
-            # Sin esta comprobación, interrumpir a NOVA justo aquí hacía
-            # que empezara a hablar igual, un instante después de haberla
-            # mandado callar. En NOVA4 el flag existía, se ponía y se
-            # limpiaba... y no se consultaba en ningún sitio.
             if self._interrupt.is_set():
                 log.debug("descarto por interrupción: %r", item)
                 self._interrupt.clear()
@@ -153,47 +162,76 @@ class Speaker:
             self._on_start()
             t0 = time.monotonic()
             try:
-                # Motor nuevo por frase: ver el porqué en el docstring del
-                # módulo (reusar uno solo hace que solo la primera suene).
-                self._engine = self._crear_motor()
-                self._engine.say(item)
-                self._engine.runAndWait()
-                log.info("hablado en %.2fs (%d caracteres)", time.monotonic() - t0, len(item))
+                senal, sr = self._sintetizar(item)
+                if senal is None:
+                    log.warning("no pude sintetizar %r", item)
+                else:
+                    self._reproducir(senal, sr)
+                    log.info(
+                        "hablado en %.2fs (%d caracteres, %.1fs de audio)",
+                        time.monotonic() - t0, len(item), len(senal) / sr,
+                    )
             except Exception:
                 log.warning("fallo hablando", exc_info=True)
             finally:
                 self._speaking.clear()
+                self._on_nivel(0.0)
                 self._on_end()
+
+    # ── Síntesis ─────────────────────────────────────────────────────
+
+    def _sintetizar(self, texto: str) -> tuple[np.ndarray | None, int]:
+        """Pide el audio a SAPI en vez de dejarle hablar."""
+        destino = os.path.join(
+            tempfile.gettempdir(), f"nova_tts_{threading.get_ident()}.wav"
+        )
+        try:
+            motor = self._crear_motor()
+            motor.save_to_file(texto, destino)
+            motor.runAndWait()
+            del motor
+
+            with wave.open(destino, "rb") as w:
+                sr = w.getframerate()
+                canales = w.getnchannels()
+                crudo = np.frombuffer(w.readframes(w.getnframes()), "<i2")
+            senal = crudo.astype(np.float32) / 32768.0
+            if canales > 1:
+                senal = senal.reshape(-1, canales).mean(axis=1)
+            return senal, sr
+        finally:
+            try:
+                os.remove(destino)
+            except OSError:
+                pass
+
+    def _reproducir(self, senal: np.ndarray, sr: int) -> None:
+        """Reproduce y va contando el nivel real de cada bloque."""
+        import sounddevice as sd
+
+        bloque = max(1, int(sr * BLOQUE_MS / 1000))
+        with sd.OutputStream(samplerate=sr, channels=1, dtype="float32",
+                             blocksize=bloque) as flujo:
+            for i in range(0, len(senal), bloque):
+                if self._interrupt.is_set():
+                    log.debug("corto la reproducción a media frase")
+                    break
+                trozo = senal[i:i + bloque]
+                if len(trozo) < bloque:
+                    trozo = np.pad(trozo, (0, bloque - len(trozo)))
+                flujo.write(trozo.reshape(-1, 1))
+                self._on_nivel(float(np.sqrt(np.mean(trozo.astype(np.float64) ** 2))))
 
     def _crear_motor(self):
         # Engine() a pelo, NUNCA pyttsx3.init(): init() recicla el motor
-        # anterior mientras self._engine lo mantenga vivo, y el reciclado
-        # es justo el que ya no suena (ver docstring del módulo).
+        # anterior mientras alguien lo mantenga vivo, y el reciclado es
+        # justo el que ya no funciona (ver docstring del módulo).
         from pyttsx3.engine import Engine
 
         motor = Engine()
         motor.setProperty("rate", self.rate)
         self._pick_spanish_voice(motor)
-        self._forzar_dispositivo_actual(motor)
         return motor
-
-    def _forzar_dispositivo_actual(self, motor) -> None:  # noqa: ANN001
-        """SAPI5 guarda su propio dispositivo de salida (independiente del
-        predeterminado general de Windows) y no siempre se entera cuando
-        cambia — típico tras conectar auriculares nuevos: el resto del
-        sistema (incluido el chime, que usa PortAudio) sigue al
-        dispositivo actual y SAPI se queda pegado al de antes, hablando
-        hacia un dispositivo que ya no escuchas. Crear un SpMMAudioOut
-        nuevo obliga a SAPI a re-preguntar cuál es el predeterminado de
-        AHORA en vez de usar el que tenía cacheado.
-        """
-        try:
-            import comtypes.client
-
-            salida = comtypes.client.CreateObject("SAPI.SpMMAudioOut")
-            motor.proxy._driver._tts.AudioOutputStream = salida  # noqa: SLF001
-        except Exception:
-            log.debug("no pude forzar el dispositivo de audio de la voz", exc_info=True)
 
     def _pick_spanish_voice(self, motor) -> None:  # noqa: ANN001
         try:
