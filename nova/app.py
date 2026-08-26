@@ -77,11 +77,17 @@ def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
     return hablar and not silenciada and tts_activo
 
 
-def estado_en_reposo(*, ocupada: bool, despierta: bool) -> str:
-    """Qué estado le toca al orbe cuando NOVA termina de hablar."""
+def estado_en_reposo(*, ocupada: bool, escuchando: bool) -> str:
+    """Qué estado le toca al orbe cuando NOVA termina de hablar.
+
+    `escuchando` NO es "despierta". Despierta sigue veinte segundos, pero
+    sin repetir su nombre sólo te atiende dentro del hueco de
+    seguimiento. Enseñar "te escucho" en los doce segundos restantes era
+    mentir: el panel decía que sí y ella te ignoraba.
+    """
     if ocupada:
         return "pensando"
-    return "escucha" if despierta else "dormida"
+    return "escucha" if escuchando else "dormida"
 
 
 class _Worker(QObject):
@@ -245,6 +251,8 @@ class Nova(QObject):
         self._ocupada = False
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
+        self._modo_ligero = False
+        self._ligero_disponible: bool | None = None
         self._voz_silenciada = False
 
     # ── Arranque / apagado ───────────────────────────────────────────
@@ -261,7 +269,16 @@ class Nova(QObject):
         # el hilo de Qt (ver la cabecera de este módulo).
         self._reloj = QTimer(self)
         self._reloj.timeout.connect(self._revisar_recordatorios)
+        self._reloj.timeout.connect(self._revisar_recursos)
         self._reloj.start(int(SEGUNDOS_ENTRE_REVISIONES * 1000))
+
+        # El hueco de seguimiento se cierra solo, sin que pase ningún
+        # evento: nadie avisa de que han pasado ocho segundos. Sin este
+        # latido, el panel se quedaba en "te escucho" y el borde azul
+        # encendido hasta que volvieras a hablarle.
+        self._latido = QTimer(self)
+        self._latido.timeout.connect(self._sincronizar_estado)
+        self._latido.start(500)
         self.speaker.start()
 
         self.ui.mostrar()
@@ -306,6 +323,7 @@ class Nova(QObject):
         self.speaker.shut_up()
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
+        self._modo_ligero = False
         self.ui.set_estado("escucha")
 
     def _al_nada(self) -> None:
@@ -318,6 +336,69 @@ class Nova(QObject):
         if not self._ocupada:
             self.glow.apagar()
             self._reposo()
+
+    def _sincronizar_estado(self) -> None:
+        """Devuelve la interfaz a la verdad cuando el tiempo la cambia.
+
+        Sólo actúa cuando NOVA no está haciendo nada: si está pensando,
+        hablando o capturando, ese estado manda y no lo pisa nadie.
+        """
+        if self._ocupada or self.speaker.speaking or not self.listener.ready:
+            return
+        self._reposo()
+
+    # ── Recursos ─────────────────────────────────────────────────────
+
+    def _revisar_recursos(self) -> None:
+        """¿Sigue el modelo dentro de la GPU, o lo ha echado un juego?
+
+        Cuando un juego se queda con la VRAM, el driver expulsa al modelo
+        y Ollama sigue respondiendo... desde la CPU, cuatro veces más
+        lento, sin que nada lo diga. Medido con Star Citizen abierto:
+        qwen3.5:4b tardaba 4.36-7.44 s con sólo el 10% en la GPU, y
+        qwen2.5:3b hacía lo mismo en 1.11-1.19 s porque SÍ cabía.
+
+        Así que se cambia al pequeño mientras dure la escasez, y se
+        vuelve al bueno cuando haya sitio otra vez.
+        """
+        if self._ocupada:
+            return
+        try:
+            residencia = self.llm.residencia()
+        except Exception:  # noqa: BLE001
+            return
+
+        apretado = residencia < CONFIG.residencia_minima
+        if apretado == self._modo_ligero:
+            return
+        if apretado and self._hay_modelo_ligero():
+            log.info("sólo el %.0f%% del modelo en la GPU: paso al ligero",
+                     residencia * 100)
+            self.llm.usar_modelo(CONFIG.model_ligero)
+            self._modo_ligero = True
+        elif not apretado and self._modo_ligero:
+            log.info("hay VRAM otra vez: vuelvo a %s", CONFIG.model)
+            self.llm.usar_modelo(CONFIG.model)
+            self._modo_ligero = False
+        self.ui.set_modo_ligero(self._modo_ligero)
+
+    def _hay_modelo_ligero(self) -> bool:
+        """¿Existe de verdad el modelo de repuesto? Se pregunta una vez.
+
+        Si NOVA_MODEL_LIGERO apunta a algo que no está descargado,
+        cambiarse a él la dejaría muda. Mejor seguir lenta que callada.
+        """
+        if self._ligero_disponible is None:
+            nombre = CONFIG.model_ligero
+            self._ligero_disponible = bool(
+                nombre and nombre != CONFIG.model and self.llm.tiene_modelo(nombre)
+            )
+            if not self._ligero_disponible and nombre:
+                log.warning(
+                    "no encuentro %s: sin modelo de repuesto para cuando falte VRAM "
+                    "(descárgalo con: ollama pull %s)", nombre, nombre,
+                )
+        return self._ligero_disponible
 
     # ── Recordatorios ────────────────────────────────────────────────
 
@@ -461,6 +542,7 @@ class Nova(QObject):
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
+        self._modo_ligero = False
 
         # ¿Está contestando a una confirmación pendiente?
         if self._pendiente is not None:
@@ -485,6 +567,7 @@ class Nova(QObject):
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
+        self._modo_ligero = False
         if not self._ocupada:
             self.ui.set_estado("dormida")
         if motivo == "despedida":
@@ -571,11 +654,17 @@ class Nova(QObject):
         if estado:
             self.ui.set_estado(estado)
             return
-        siguiente = estado_en_reposo(ocupada=self._ocupada, despierta=self.listener.awake)
+        siguiente = estado_en_reposo(
+            ocupada=self._ocupada, escuchando=self.listener.escuchando
+        )
         if siguiente == "escucha" and CONFIG.glow_enabled:
             # La conversación sigue abierta: se nota en el glow que no
             # hace falta repetir "NOVA" para el siguiente turno.
             self.glow.encender("escucha")
+        else:
+            # Y se apaga cuando deja de estarlo. Encenderlo sin apagarlo
+            # nunca es la forma de que se quede pegado para siempre.
+            self.glow.apagar()
         self.ui.set_estado(siguiente)
 
     def _hablando_inicio(self) -> None:

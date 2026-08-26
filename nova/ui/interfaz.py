@@ -110,6 +110,10 @@ class Interfaz(QObject):
         self.panel.añadir_accion(tipo, texto)
         log.debug("actividad: %s", texto)
 
+    def set_modo_ligero(self, activo: bool) -> None:
+        """Un juego se ha quedado con la VRAM y NOVA va con el modelo pequeño."""
+        self.panel.set_modo_ligero(activo)
+
     def set_pendientes(self, cuantos: int) -> None:
         """Recordatorios vencidos esperando a que le hables."""
         self.panel.set_pendientes(cuantos)

@@ -127,6 +127,9 @@ class Panel(QWidget):
         # te corta a mitad de partida es peor que no tenerlo.
         self._pendientes = 0
         self._fase_aviso = 0.0
+        # Un juego se ha llevado la VRAM y va con el modelo pequeño.
+        # Decirlo evita el '¿por qué va lenta hoy?'.
+        self._modo_ligero = False
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
@@ -171,6 +174,11 @@ class Panel(QWidget):
         self._respondido = texto or ""
         self._ajustar_alto()
         self.update()
+
+    def set_modo_ligero(self, activo: bool) -> None:
+        if bool(activo) != self._modo_ligero:
+            self._modo_ligero = bool(activo)
+            self.update()
 
     def set_pendientes(self, cuantos: int) -> None:
         if cuantos != self._pendientes:
@@ -256,8 +264,19 @@ class Panel(QWidget):
         fuente.setBold(True)
         p.setFont(fuente)
         p.setPen(color)
-        p.drawText(QRect(34, 12, 200, 20), Qt.AlignVCenter | Qt.AlignLeft,
-                   ETIQUETAS.get(self._estado, self._estado))
+        etiqueta = ETIQUETAS.get(self._estado, self._estado)
+        p.drawText(QRect(34, 12, 200, 20), Qt.AlignVCenter | Qt.AlignLeft, etiqueta)
+
+        if self._modo_ligero:
+            # A la derecha de la etiqueta, en gris: es un dato, no una
+            # alarma. Lo que evita es preguntarse por qué va lenta hoy.
+            fina = QFont()
+            fina.setPointSize(7)
+            p.setFont(fina)
+            p.setPen(_TENUE)
+            ancho = QFontMetrics(fuente).horizontalAdvance(etiqueta)
+            p.drawText(QRect(40 + ancho, 13, 150, 18),
+                       Qt.AlignVCenter | Qt.AlignLeft, "· modo ligero")
 
         # Aviso pendiente: un punto que respira al lado del minimizar.
         # No dice QUÉ es —eso te lo cuenta cuando le hables— sólo que hay

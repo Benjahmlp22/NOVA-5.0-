@@ -11,7 +11,11 @@ from logging.handlers import RotatingFileHandler
 
 import pytest
 
-from nova.app import estado_en_reposo, va_a_sonar
+from nova.app import Nova, estado_en_reposo, va_a_sonar
+from nova.config import CONFIG
+
+CONFIG_NORMAL = CONFIG.model
+CONFIG_LIGERO = CONFIG.model_ligero
 
 
 @pytest.fixture
@@ -66,23 +70,32 @@ def test_mensaje_que_no_se_dice_no_suena():
 
 # ── Estado del orbe al terminar de hablar ────────────────────────────
 
-@pytest.mark.parametrize("ocupada,despierta,esperado", [
+@pytest.mark.parametrize("ocupada,escuchando,esperado", [
     (True,  True,  "pensando"),   # sigue trabajando: manda eso
     (True,  False, "pensando"),
     (False, True,  "escucha"),    # conversación continua abierta
     (False, False, "dormida"),
 ])
-def test_estado_en_reposo(ocupada, despierta, esperado):
-    assert estado_en_reposo(ocupada=ocupada, despierta=despierta) == esperado
+def test_estado_en_reposo(ocupada, escuchando, esperado):
+    assert estado_en_reposo(ocupada=ocupada, escuchando=escuchando) == esperado
 
 
-def test_ocupada_manda_sobre_despierta():
+def test_ocupada_manda_sobre_escuchando():
     """Nunca "escucha" mientras el modelo aún está pensando.
 
     Si no, el orbe invita a hablar justo cuando la respuesta anterior
     todavía está en camino.
     """
-    assert estado_en_reposo(ocupada=True, despierta=True) == "pensando"
+    assert estado_en_reposo(ocupada=True, escuchando=True) == "pensando"
+
+
+def test_despierta_pero_fuera_del_hueco_no_es_escuchar():
+    """El bug que se veía a diario: "te escucho" mientras te ignoraba.
+
+    Despierta dura veinte segundos; atenderte sin repetir su nombre,
+    ocho. En los doce restantes el panel decía que sí.
+    """
+    assert estado_en_reposo(ocupada=False, escuchando=False) == "dormida"
 
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -156,3 +169,89 @@ def test_el_fichero_de_log_rota_y_no_crece_sin_fin(tmp_path, logging_restaurado)
                 if isinstance(h, RotatingFileHandler)]
     assert ficheros[0].maxBytes > 0
     assert ficheros[0].backupCount > 0
+
+
+# ── Modo ligero: qué pasa cuando un juego se lleva la VRAM ───────────
+#
+# Se prueba la máquina de estados sin construir la app entera: lo que
+# puede romperse aquí es CUÁNDO se cambia, no cómo se dibuja.
+
+class _LLMFalso:
+    def __init__(self, modelo: str) -> None:
+        self.model = modelo
+        self.residente = 1.0
+        self.cambios: list[str] = []
+
+    def residencia(self) -> float:
+        return self.residente
+
+    def tiene_modelo(self, nombre: str) -> bool:  # noqa: ARG002
+        return True
+
+    def usar_modelo(self, nombre: str) -> None:
+        self.cambios.append(nombre)
+        self.model = nombre
+
+
+class _UIFalsa:
+    def __init__(self) -> None:
+        self.avisos: list[bool] = []
+
+    def set_modo_ligero(self, activo: bool) -> None:
+        self.avisos.append(activo)
+
+
+class _NovaPelada:
+    """Sólo las dos piezas que deciden el modo ligero."""
+
+    _ocupada = False
+    _modo_ligero = False
+    _ligero_disponible = None
+    _revisar_recursos = Nova._revisar_recursos
+    _hay_modelo_ligero = Nova._hay_modelo_ligero
+
+    def __init__(self) -> None:
+        self.llm = _LLMFalso(CONFIG.model)
+        self.ui = _UIFalsa()
+
+
+def test_baja_al_modelo_ligero_cuando_la_gpu_se_llena():
+    n = _NovaPelada()
+    n._revisar_recursos()
+    assert not n._modo_ligero
+
+    n.llm.residente = 0.10          # lo medido con un juego abierto
+    n._revisar_recursos()
+    assert n._modo_ligero
+    assert n.llm.model == CONFIG_LIGERO
+
+
+def test_no_repite_el_cambio_mientras_dura_la_escasez():
+    """Cambiar descarga el modelo anterior: hacerlo cada 5 s sería peor
+    que la lentitud que intenta arreglar."""
+    n = _NovaPelada()
+    n.llm.residente = 0.10
+    for _ in range(5):
+        n._revisar_recursos()
+    assert n.llm.cambios == [CONFIG_LIGERO]
+
+
+def test_no_cambia_de_modelo_a_mitad_de_una_respuesta():
+    n = _NovaPelada()
+    n._ocupada = True
+    n.llm.residente = 0.10
+    n._revisar_recursos()
+    assert not n._modo_ligero
+
+
+def test_vuelve_al_bueno_al_cerrar_el_juego():
+    n = _NovaPelada()
+    n.llm.residente = 0.10
+    n._revisar_recursos()
+    n.llm.residente = 1.0
+    n._revisar_recursos()
+    assert not n._modo_ligero
+    assert n.llm.model == CONFIG_NORMAL
+    # Y la interfaz se entera de las dos veces: el usuario tiene que
+    # poder saber por qué NOVA fue lenta un rato.
+    assert n.ui.avisos == [True, False]

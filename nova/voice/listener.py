@@ -194,6 +194,18 @@ class VoiceListener:
         return self._awake
 
     @property
+    def escuchando(self) -> bool:
+        """¿Le puedes hablar AHORA sin volver a decir su nombre?
+
+        No es lo mismo que `awake`. Despierta sigue veinte segundos, pero
+        sin nombrarla sólo te atiende dentro del hueco de seguimiento.
+        La interfaz tiene que enseñar esto y no `awake`: decir "te
+        escucho" durante doce segundos en los que te va a ignorar es
+        mentir, y es lo que hacía.
+        """
+        return self._awake and self._en_seguimiento()
+
+    @property
     def ready(self) -> bool:
         return self._ready.is_set()
 
