@@ -37,9 +37,12 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Banco de pruebas WER + grabador de corpus | **hecho** |
 | Pre-roll, VAD y unmute sin perder el principio | **hecho** |
 | Panel abajo a la derecha | **hecho** |
-| Búsqueda en internet | **hecho** |
+| Búsqueda en internet | **hecho** — entra en la página si el resumen no trae el dato |
+| Hablar mientras el modelo escribe | **hecho** |
+| Cortarla hablando por encima | **hecho** |
+| Órdenes encadenadas | **hecho** — 8/8 en tres pasadas |
 | Presupuesto de RAM/VRAM medido | **hecho** |
-| Latencia punta a punta < 1,5 s | **NO** — ver su sección |
+| Latencia punta a punta < 1,5 s | **NO**, pero de 3-5.6 s a 2-5.2 s |
 
 ## Qué necesitas
 
@@ -217,89 +220,73 @@ Sigue siendo PyQt5, sin marco, siempre encima, fuera del Alt+Tab
 Comprobado con una partida a pantalla completa delante — el panel se ve
 encima y el juego no se entera.
 
-## Latencia de punta a punta: el objetivo NO se cumple
+## Escuchar sin responder a todo
 
-Se fijó como criterio "menos de 1,5 s desde que dejas de hablar hasta la
-primera sílaba de NOVA". **No se cumple, y no está cerca.** Medido el
-26/08 con todo montado:
+Un asistente que responde a lo que oiga es peor que uno sordo. Cinco
+filtros, cada uno de un fallo visto en uso real:
 
-| tramo | tiempo |
-|---|---|
-| detectar que has terminado de hablar (silencio) | 0.70 s |
-| etapa 2: Whisper `medium` en la 3060 | 0.50 – 0.84 s |
-| cerebro: Ollama `qwen3.5:4b` + herramientas | 0.33 – 2.66 s |
-| sintetizar la voz y empezar a sonar | 0.67 s |
-| **total** | **≈ 2.2 – 4.9 s** |
+**No se oye a sí misma.** El búfer de pre-roll se tira al dejar de
+hablar: lo que hay en ese segundo es su voz, y entraba como orden.
 
-Dónde está el margen, en orden de lo que más devuelve:
+**No acepta órdenes mientras está ocupada.** Dos frases seguidas se
+encolaban y contestaba una detrás de otra.
 
-**El cerebro, esperando la respuesta entera (hasta 2.66 s).** Es el
-tramo más gordo y el que más se notaría: con la respuesta en streaming se
-podría arrancar el TTS con la primera frase en vez de esperar al punto
-final.
+**Lo que no es habla se descarta.** Whisper devuelve SIEMPRE alguna
+frase, también con música o el audio de un juego. Se mira su
+`no_speech_prob` (> 0.60 fuera) y su `avg_logprob` (< -1.0 fuera). Una
+palabra suelta tampoco cuenta como orden, salvo las afirmaciones que
+responden a un "¿confirmas que...?".
 
-**El silencio (0.7 s).** Bajarlo es gratis en trabajo y caro en calidad:
-por debajo de ~0.5 s corta a mitad de frase, porque una coma ya da 0.4 s
-de pausa. Es un `NOVA_SILENCIO_FIN` en el `.env` para quien quiera
-probarlo.
+**La conversación continua dura 8 s, no 20.** Tras responder puedes
+seguir hablándole sin nombrarla; pasado ese hueco sigue despierta pero
+hay que volver a llamarla. Con los 20 s del timeout de sueño, en una
+habitación con la tele puesta procesaba como órdenes todo lo que se
+dijera.
 
-**Whisper (0.5-0.84 s).** Bajar a `small` lo deja en ~0.3 s a cambio de
-casi triplicar el error (9.3 % contra 3.5 %). Mal negocio.
+**"Cállate" la calla.** Junto con "duérmete", "dormite", "silencio",
+"para ya" y "déjame". Que no hiciera caso justo a eso era lo peor.
 
-Nada de esto está hecho. Queda escrito aquí y no en un TODO perdido
-porque el criterio se anunció y no se ha cumplido.
+Y se la puede **cortar hablando por encima**. Mientras habla el micro no
+se procesa pero sí se vigila, con dos condiciones a la vez: el micro 2.5×
+por encima del umbral de voz, y NOVA en una pausa de la suya — si suena
+fuerte a la vez que ella, con altavoces eso es su propio eco. Más 150 ms
+de voz sostenida, que separa "no, espera" de un golpe en la mesa.
+`NOVA_INTERRUMPIR=false` lo apaga.
 
-## El wake word: por qué "NOVA" es difícil en español
+## Latencia de punta a punta
 
-`nova` y `no va` son **la misma secuencia de fonemas**. Ningún modelo
-acústico puede separarlas; sólo el contexto de lenguaje puede. Eso
-explica el parche de NOVA4, que acepta `no\s+va` como variante del nombre
-porque Vosk transcribía así el nombre — y explica también lo que cuesta.
+Objetivo: menos de 1,5 s desde que dejas de hablar hasta la primera
+sílaba de NOVA. **Sigue sin cumplirse, pero ya está cerca en el caso
+bueno.** Medido con todo montado:
 
-Medido el 26/08 sobre 14 frases grabadas: 8 diciendo "nova" y 6 trampas
-("no va a funcionar el mando", "la novia de mi hermano", "esto no va a
-salir bien").
+| tramo | antes | ahora |
+|---|---|---|
+| detectar que has terminado (silencio) | 0.70 s | 0.70 s |
+| etapa 2: Whisper `medium` en la 3060 | 0.50 s | 0.50 s |
+| cerebro hasta la PRIMERA frase | 1.11 – 2.66 s | **0.16 – 3.33 s** |
+| sintetizar la voz y empezar a sonar | 1.40 s | **0.67 s** |
+| **total** | ≈ 3 – 5.6 s | **≈ 2.0 – 5.2 s** |
 
-| detector | despierta | falsas alarmas | carga |
-|---|---|---|---|
-| Vosk `es-0.42` + patrón de NOVA4 | 4/8 | 4/6 | 34.2 s |
-| Vosk `small` + patrón de NOVA4 | 5/8 | 3/6 | 0.6 s |
-| Vosk `small` + gramática `["nova"]` | **8/8** | 5/6 | 0.6 s |
-| Vosk `small` + gramática con señuelos | 4/8 | 1/6 | 0.6 s |
-| **faster-whisper `small` + prompt del nombre** | **8/8** | **0/6** | 2.2 s |
-| faster-whisper `medium` + prompt del nombre | 8/8 | 1/6 | 4.5 s |
+Dos cambios se comieron la diferencia:
 
-Tres cosas que salen de ahí:
+**Hablar mientras el modelo escribe.** Ollama va en streaming y las
+frases se dicen según se cierran, sin esperar al punto final. En una
+respuesta directa la primera frase está lista en 0.16 s donde antes la
+respuesta entera tardaba 1.11 s.
 
-**El modelo grande es PEOR que el pequeño**, en las dos columnas, y
-además no soporta gramática restringida ("Runtime graphs are not
-supported by this model"). Los 2.3 GB y los 47 s de arranque no compran
-nada para esta tarea.
+**Pedirle el audio a SAPI en vez de dejarle hablar.** Sintetizar va ~9×
+más rápido que el tiempo real, así que la primera sílaba baja de 1.40 s a
+0.67 s. Ver la sección del panel.
 
-**Con Vosk sólo hay balancín, no solución.** Gramática permisiva: 8/8
-aciertos y 5/6 falsas. Gramática con señuelos: 1/6 falsas pero 4/8
-aciertos. Es lo que pasa cuando pides separar dos cosas idénticas.
+Lo que queda, y por qué no está hecho:
 
-**Whisper sí lo resuelve, porque tiene contexto de lenguaje.** Con el
-nombre en el prompt como nombre ("NOVA, abre Discord"), distingue las 8
-de las 6 sin fallar ninguna.
+**El silencio (0.70 s).** Es un `NOVA_SILENCIO_FIN` en el `.env`.
+Bajarlo es gratis en trabajo y caro en calidad: por debajo de ~0.5 s
+corta a mitad de frase, porque una coma ya da 0.4 s de pausa.
 
-De ahí sale la arquitectura de dos etapas, y la etapa 1 deja de ser el
-problema para ser sólo una puerta barata:
-
-    Etapa 1   Vosk small + gramática ["nova"]      58 MB, carga 0.6 s
-              8/8 de recall. Salta de más a propósito: sólo abre la
-              puerta, no decide nada.
-
-    Etapa 2   faster-whisper medium + prompt        924 MiB, 0.50 s
-              Confirma que el nombre estaba de verdad Y transcribe la
-              orden en la misma pasada. Si no estaba, NOVA vuelve a
-              dormir sin haber hecho ruido.
-
-El coste de que la etapa 1 salte de más es una pasada de Whisper de
-0.5 s sin efecto visible — no suena el chime hasta que la etapa 2
-confirma. A cambio desaparecen el parche de `no va`, los 47 s de arranque
-y las 4 falsas alarmas de cada 6.
+**Las órdenes con herramienta (hasta 3.3 s).** Ahí el suelo lo pone la
+herramienta, no el modelo: buscar en internet son 2 s de red que no se
+pueden acelerar desde aquí.
 
 ## Presupuesto de recursos
 
@@ -423,7 +410,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde azul
-tests/              143 tests, sin red ni micrófono
+tests/              261 tests, sin red ni micrófono
 ```
 
 ## Tests
