@@ -246,3 +246,76 @@ def test_el_modelo_ve_la_herramienta_de_busqueda():
     reg = build_registry()
     ofrecidas = {e["function"]["name"] for e in reg.llm_schemas()}
     assert "web_search" in ofrecidas
+
+
+# ── Entrar en la página cuando el resumen no contesta ────────────────
+#
+# Los resúmenes de buscador para "cuánto cuesta X" son la descripción
+# comercial de la tienda, sin un solo precio. La página sí lo tiene.
+
+def test_la_unidad_de_la_pregunta_no_es_la_respuesta():
+    """«cuánto cuesta una fuente de 750 vatios»: el 750 es la PREGUNTA.
+
+    Con "cualquier número vale", el resumen parecía contestar y nunca se
+    entraba en la página. Para un precio hace falta una cifra con moneda.
+    """
+    from nova.tools.web import _señal_esperada, _tiene_dato
+
+    señal = _señal_esperada("cuanto cuesta una fuente de 750 vatios")
+    assert not _tiene_dato("Fuentes de alimentación de 750 vatios y 850W", señal)
+    assert _tiene_dato("Cooler Master 750W por 89,90 €", señal)
+
+
+def test_para_temperatura_se_esperan_grados():
+    from nova.tools.web import _señal_esperada, _tiene_dato
+
+    señal = _señal_esperada("que temperatura hace en madrid")
+    assert _tiene_dato("Ahora mismo 21 grados", señal)
+    assert not _tiene_dato("Madrid tiene 3 millones de habitantes", señal)
+
+
+def test_para_lo_demas_vale_cualquier_cifra():
+    from nova.tools.web import _señal_esperada, _tiene_dato
+
+    señal = _señal_esperada("cuantos goles metio messi")
+    assert _tiene_dato("Metió 7 goles", señal)
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.amazon.es/nvidia-rtx-4070/s?k=nvidia+rtx+4070",
+    "https://tienda.es/buscar?q=fuente",
+    "https://otra.com/search?query=algo",
+])
+def test_las_paginas_de_busqueda_se_saltan(url):
+    """Se montan con JavaScript: bajarlas sólo da el menú y el pie."""
+    from nova.tools.web import _ES_BUSCADOR
+
+    assert _ES_BUSCADOR.search(url)
+
+
+def test_una_ficha_de_producto_no_se_salta():
+    from nova.tools.web import _ES_BUSCADOR
+
+    assert not _ES_BUSCADOR.search("https://ultimainformatica.com/nvidia-geforce-rtx-4070")
+
+
+def test_solo_se_profundiza_si_se_pidio_un_dato():
+    """Entrar en la página cuesta segundos: no se hace por gusto."""
+    from nova.tools.web import _PIDE_UN_DATO
+
+    assert _PIDE_UN_DATO.search("cuanto cuesta una fuente")
+    assert _PIDE_UN_DATO.search("que precio tiene la 4070")
+    assert not _PIDE_UN_DATO.search("quien gano el mundial de 2022")
+    assert not _PIDE_UN_DATO.search("como se hace una tortilla")
+
+
+def test_lo_sacado_de_la_pagina_va_marcado():
+    """El modelo tiene que saber que esas cifras son de la ficha."""
+    texto = redactar(
+        "cuanto cuesta",
+        [{"title": "T", "href": "https://a.es/p",
+          "body": "Una descripción comercial larga y sin ninguna cifra concreta."}],
+        detalle="139,95 €",
+    )
+    assert "139,95 €" in texto
+    assert "página" in texto.lower()

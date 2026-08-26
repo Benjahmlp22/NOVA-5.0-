@@ -28,6 +28,10 @@ log = logging.getLogger("nova.tools.web")
 # esperar: en voz, cuatro segundos de silencio ya parecen una avería.
 TIMEOUT_S = 4.0
 
+# Entrar en una página es un extra sobre una espera que ya existe, así
+# que se le da menos margen todavía.
+TIMEOUT_PAGINA_S = 2.5
+
 # Tres resultados. Con más, el modelo tiene que resumir un texto largo
 # antes de contestar y se dispara la latencia; con menos, una sola página
 # mala se lleva la respuesta.
@@ -125,7 +129,7 @@ def _utiles(resultados: list[dict], claves: set[str],
 
 
 def redactar(consulta: str, resultados: list[dict],
-             tope: int = MAX_RESULTADOS) -> str:
+             tope: int = MAX_RESULTADOS, detalle: str = "") -> str:
     """Material en bruto para que el modelo CONTESTE, no para leerlo.
 
     Aquí se rompe a medias la regla de devolver la frase ya redactada, y
@@ -146,7 +150,94 @@ def redactar(consulta: str, resultados: list[dict],
     ]
     for r in utiles:
         partes.append(f"- {r['titulo']}: {r['cuerpo']}")
+    if detalle:
+        partes.append(f"- Sacado de la página, con cifras: {detalle}")
     return "\n".join(partes)
+
+
+# Preguntas cuya respuesta es un dato concreto, no una explicación. En
+# esas, un resumen de buscador que no trae ni un número no ha contestado
+# nada, y merece la pena entrar en la página.
+_PIDE_UN_DATO = re.compile(
+    r"\b(cu[aá]nto|cu[aá]nta|cu[aá]ntos|cu[aá]ntas|precio|cuesta|vale|"
+    r"cu[aá]ndo|qu[eé] d[ií]a|a qu[eé] hora|temperatura|grados|"
+    r"cotiza|cambio|d[oó]lar|euro)\b",
+    re.IGNORECASE,
+)
+
+# Qué cifra cuenta como respuesta, según lo que se preguntó. La unidad
+# importa: para "cuánto cuesta una fuente de 750 vatios", el "750 vatios"
+# es la PREGUNTA, no la respuesta. Buscando cualquier número, el resumen
+# parecía contestar y nunca se entraba en la página.
+_DINERO = re.compile(r"\d[\d.,]*\s*(?:€|eur\b|euros|\$|usd|dólares|dolares)"
+                     r"|(?:€|\$)\s*\d", re.IGNORECASE)
+_TEMPERATURA = re.compile(r"-?\d[\d.,]*\s*(?:°|grados)", re.IGNORECASE)
+_CUALQUIER_CIFRA = re.compile(r"\d")
+
+_PREGUNTA_DE_DINERO = re.compile(r"\b(precio|cuesta|vale|valen|cu[aá]nto vale|"
+                                 r"cotiza|cambio|d[oó]lar|euro)\b", re.IGNORECASE)
+_PREGUNTA_DE_TEMPERATURA = re.compile(r"\b(temperatura|grados|calor|fr[ií]o|tiempo hace)\b",
+                                      re.IGNORECASE)
+
+
+def _señal_esperada(consulta: str) -> re.Pattern:
+    if _PREGUNTA_DE_DINERO.search(consulta):
+        return _DINERO
+    if _PREGUNTA_DE_TEMPERATURA.search(consulta):
+        return _TEMPERATURA
+    return _CUALQUIER_CIFRA
+
+
+def _tiene_dato(texto: str, señal: re.Pattern = _CUALQUIER_CIFRA) -> bool:
+    return bool(señal.search(texto))
+
+
+# Páginas de BÚSQUEDA de una tienda, no de producto. Se montan con
+# JavaScript, así que bajarlas sólo da el menú y el pie: entrar ahí es
+# gastar 0.7 s para nada.
+_ES_BUSCADOR = re.compile(r"[?&](k|q|s|search|query)=|/s\?|/buscar|/search", re.IGNORECASE)
+
+
+def _entrar_en_la_pagina(ddgs, url: str, claves: set[str],  # noqa: ANN001
+                         señal: re.Pattern = _CUALQUIER_CIFRA) -> str:
+    """Baja la página y saca las líneas donde está el dato.
+
+    Los resúmenes de buscador para "cuánto cuesta X" son casi siempre
+    la descripción comercial de la tienda, sin un solo número. La página
+    sí lo tiene, pero también tiene el menú, el pie y la política de
+    cookies: se filtra por líneas cortas que contengan una cifra con
+    unidad y alguna palabra de lo preguntado.
+    """
+    try:
+        pagina = ddgs.extract(url)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("no pude entrar en %s: %s", url, exc)
+        return ""
+
+    texto = str(pagina.get("text") or pagina.get("content") or "")
+    candidatas: list[tuple[int, str]] = []
+    for linea in texto.splitlines():
+        limpia = _limpiar(linea)
+        # Ni un título suelto ni un párrafo entero: lo que trae precios
+        # son líneas de producto, de largo intermedio.
+        if not (8 <= len(limpia) <= 160) or not _tiene_dato(limpia, señal):
+            continue
+        # Las palabras de la consulta suben la línea, pero no son
+        # obligatorias: en una ficha de producto el precio suele ir en su
+        # propia línea ("549,00 €") sin repetir el nombre.
+        relevancia = sum(1 for c in claves if c in limpia.lower())
+        candidatas.append((relevancia, limpia))
+
+    if not candidatas:
+        return ""
+    candidatas.sort(key=lambda x: x[0], reverse=True)
+    vistas: list[str] = []
+    for _puntos, linea in candidatas:
+        if linea not in vistas:
+            vistas.append(linea)
+        if len(vistas) == 3:
+            break
+    return " · ".join(vistas)
 
 
 def buscar(query: str, max_resultados: int = MAX_RESULTADOS) -> ToolResult:
@@ -184,10 +275,44 @@ def buscar(query: str, max_resultados: int = MAX_RESULTADOS) -> ToolResult:
         )
 
     log.info("busqué %r y encontré %d resultados", consulta, len(crudos))
+    claves = _palabras_clave(consulta)
+    utiles = _utiles(crudos, claves, max_resultados)
+
+    # Si preguntaste por un dato concreto y ningún resumen trae una cifra,
+    # los resúmenes no han contestado: se entra en la primera página. Sólo
+    # entonces, porque cuesta ~0.7 s.
+    detalle = ""
+    señal = _señal_esperada(consulta)
+    if utiles and _PIDE_UN_DATO.search(consulta) and not any(
+        _tiene_dato(r["cuerpo"], señal) for r in utiles
+    ):
+        candidatas = [
+            c.get("href", "") for c in crudos
+            if _dominio(c.get("href") or "") in {u["dominio"] for u in utiles}
+            and not _ES_BUSCADOR.search(c.get("href") or "")
+        ]
+        try:
+            # Timeout más corto que el de la búsqueda: esto es un extra
+            # sobre una espera que ya existe.
+            #
+            # Dos páginas y no una: con una sola, "cuánto cuesta una
+            # fuente Corsair RM750e" se quedaba sin respuesta porque la
+            # primera tienda no soltaba el dato y la segunda sí (139,95 €).
+            # El precio de eso es el peor caso, que sube a ~5 s.
+            with DDGS(timeout=TIMEOUT_PAGINA_S) as ddgs:
+                for url in candidatas[:2]:
+                    detalle = _entrar_en_la_pagina(ddgs, url, claves, señal)
+                    if detalle:
+                        break
+        except Exception as exc:  # noqa: BLE001
+            log.debug("no pude profundizar: %s", exc)
+        if detalle:
+            log.info("entré en la página para sacar el dato")
+
     return ToolResult(
         ok=True,
-        message=redactar(consulta, crudos, max_resultados),
-        data={"query": consulta, "resultados": len(crudos)},
+        message=redactar(consulta, crudos, max_resultados, detalle=detalle),
+        data={"query": consulta, "resultados": len(crudos), "profundizo": bool(detalle)},
     )
 
 
