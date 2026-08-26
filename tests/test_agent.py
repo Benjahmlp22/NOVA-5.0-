@@ -217,3 +217,59 @@ def test_una_ronda_de_herramientas_no_habla():
     ])
     agente.run("sys", [], "haz eco")
     assert dichas == ["Listo."]
+
+
+# ── Pedir permiso no puede cancelar el resto de la orden ─────────────
+#
+# El caso real: "olvida lo anterior sobre mí y recuerda que soy Messi".
+# Son dos acciones y sólo una pide permiso. Antes, esa una abortaba la
+# ronda entera: el usuario decía "sí", se borraba lo viejo, y lo de
+# Messi no se había guardado nunca — sin que nadie avisara.
+
+def _dos_acciones(una_peligrosa: bool = True):
+    return LLMResponse(tool_calls=[
+        ToolCall(id="1", name="test.borrar" if una_peligrosa else "test.eco",
+                 args={} if una_peligrosa else {"text": "uno"}),
+        ToolCall(id="2", name="test.eco", args={"text": "soy Messi"}),
+    ])
+
+
+def test_lo_que_no_pide_permiso_se_hace_igual():
+    llm = FakeLLM([_dos_acciones()])
+    reply = Agent(llm, _registro()).run("sys", [], "olvida eso y recuerda que soy Messi")
+    assert "test.eco" in reply.tools_used
+
+
+def test_la_pregunta_va_despues_de_contar_lo_hecho():
+    llm = FakeLLM([_dos_acciones()])
+    reply = Agent(llm, _registro()).run("sys", [], "olvida eso y recuerda que soy Messi")
+    assert reply.text.startswith("Eco: soy Messi")
+    assert "¿Confirmas" in reply.text
+
+
+def test_la_accion_peligrosa_queda_en_la_cola_sin_ejecutarse():
+    llm = FakeLLM([_dos_acciones()])
+    reply = Agent(llm, _registro()).run("sys", [], "olvida eso y recuerda que soy Messi")
+    assert [p.tool for p in reply.pendientes] == ["test.borrar"]
+    assert "test.borrar" not in reply.tools_used
+
+
+def test_varias_peligrosas_se_encolan_todas():
+    llm = FakeLLM([LLMResponse(tool_calls=[
+        ToolCall(id="1", name="test.borrar", args={}),
+        ToolCall(id="2", name="test.borrar", args={}),
+    ])])
+    reply = Agent(llm, _registro()).run("sys", [], "borra las dos cosas")
+    assert len(reply.pendientes) == 2
+    # Y `pending` sigue dando la primera, para quien sólo mire una.
+    assert reply.pending is reply.pendientes[0]
+
+
+def test_sin_nada_pendiente_la_cola_esta_vacia():
+    llm = FakeLLM([
+        LLMResponse(tool_calls=[ToolCall(id="1", name="test.eco", args={"text": "hola"})]),
+        LLMResponse(text="Listo."),
+    ])
+    reply = Agent(llm, _registro()).run("sys", [], "di hola")
+    assert reply.pendientes == []
+    assert reply.pending is None

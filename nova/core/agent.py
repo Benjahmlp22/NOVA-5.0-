@@ -80,15 +80,43 @@ def _extraer_recuerdo(mensaje: str) -> str:
     return dato
 
 
+def _contar_y_preguntar(hechas: list[str], pendiente: PendingConfirmation) -> str:
+    """Lo que YA se ha hecho, y luego la pregunta por lo que falta.
+
+    Se compone aquí y no con otra vuelta al modelo a propósito: el
+    usuario está esperando con el micro mudo, y los mensajes de las
+    herramientas ya vienen escritos en español para él (esa es la razón
+    de que ToolResult.message sea una frase y no un JSON).
+    """
+    pregunta = (
+        f"¿Confirmas que quiero {pendiente.summary}?"
+        if pendiente.summary
+        else "¿Lo confirmo?"
+    )
+    if not hechas:
+        return pregunta
+    return " ".join([*hechas, pregunta])
+
+
 @dataclass
 class AgentReply:
     text: str
     tools_used: list[str] = field(default_factory=list)
-    pending: PendingConfirmation | None = None
+    # Cola, no una sola: "olvida lo mío y recuerda que soy Messi" son dos
+    # acciones y sólo una pide permiso. Antes la primera que pedía
+    # confirmación abortaba TODA la ronda y la otra no llegaba a
+    # ejecutarse nunca — el usuario decía "sí", se hacía una cosa, y la
+    # otra se había perdido por el camino sin avisar.
+    pendientes: list[PendingConfirmation] = field(default_factory=list)
     rounds: int = 0
     # Si la respuesta ya se fue diciendo en voz alta mientras se
     # generaba, quien reciba esto NO debe volver a decirla.
     ya_dicho: bool = False
+
+    @property
+    def pending(self) -> PendingConfirmation | None:
+        """La primera que espera permiso, o None."""
+        return self.pendientes[0] if self.pendientes else None
 
 
 class _EmisorDeFrases:
@@ -226,6 +254,8 @@ class Agent:
                 }
             )
 
+            aplazadas: list[PendingConfirmation] = []
+            hechas: list[str] = []
             for call in resp.tool_calls:
                 tool = self.tools.resolve(call.name)
                 if tool is None:
@@ -236,21 +266,30 @@ class Agent:
                 outcome = self.tools.execute(tool.name, call.args)
 
                 if isinstance(outcome, PendingConfirmation):
-                    # Se para aquí: el usuario decide. No seguimos dando
-                    # vueltas ni ejecutamos el resto de llamadas.
-                    self._status("waiting")
-                    return AgentReply(
-                        text=f"¿Confirmas que quiero {outcome.summary}?",
-                        tools_used=used,
-                        pending=outcome,
-                        rounds=round_n,
-                    )
+                    # Pedir permiso para ESTO no puede cancelar lo demás.
+                    # Se aparta y se sigue con el resto de la cadena; la
+                    # pregunta va al final, cuando ya está hecho lo que no
+                    # necesitaba permiso.
+                    aplazadas.append(outcome)
+                    messages.append(self._tool_msg(
+                        call.name, "Esperando a que el usuario dé permiso."))
+                    continue
 
                 if outcome.ok:
                     used.append(tool.name)
+                    hechas.append(outcome.message)
                 # Éxito → frase en español tal cual. Fallo → también
                 # texto, pero explicando el error para que pueda reaccionar.
                 messages.append(self._tool_msg(call.name, outcome.message))
+
+            if aplazadas:
+                self._status("waiting")
+                return AgentReply(
+                    text=_contar_y_preguntar(hechas, aplazadas[0]),
+                    tools_used=used,
+                    pendientes=aplazadas,
+                    rounds=round_n,
+                )
 
         # Se acabaron las rondas y el modelo seguía pidiendo herramientas.
         self._status("writing")
@@ -268,7 +307,7 @@ class Agent:
         return AgentReply(text=text, tools_used=used, rounds=self.max_rounds)
 
     def confirm(self, pending: PendingConfirmation) -> ToolResult:
-        """Ejecuta lo que quedó pendiente tras el 'sí' del usuario."""
+        """Ejecuta lo que quedó pendiente tras el «sí» del usuario."""
         self._status("tool", pending.tool, _dato_visible(pending.args))
         outcome = self.tools.execute(pending.tool, pending.args, confirmed=True)
         if isinstance(outcome, PendingConfirmation):  # no debería pasar

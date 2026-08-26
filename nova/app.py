@@ -64,6 +64,13 @@ DESPEDIDAS = ["Hasta luego.", "Aquí estaré.", "Vale."]
 _AFIRMA = ("si", "sí", "claro", "dale", "vale", "ok", "okey", "hazlo",
            "adelante", "venga", "confirmo", "correcto", "eso")
 
+# Y las que son un "no" claro. Hace falta distinguirlas de "ni sí ni no":
+# si contestas otra cosa a una pregunta pendiente, lo que has dicho es
+# una orden nueva y NO se puede tirar a la basura. Antes se cancelaba y
+# se respondía "vale, lo dejo" a una frase que no tenía nada que ver.
+_NIEGA = ("no", "nop", "nada", "cancela", "cancelar", "olvidalo", "olvídalo",
+          "déjalo", "dejalo", "para", "mejor no", "negativo")
+
 
 def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
     """¿Este texto va a producir audio de verdad?
@@ -95,7 +102,7 @@ class _Worker(QObject):
 
     listo = pyqtSignal(str, list, bool)    # texto, herramientas, ya dicho
     frase = pyqtSignal(str)                # una frase suelta, según se genera
-    pendiente = pyqtSignal(object)          # PendingConfirmation
+    pendiente = pyqtSignal(object, str)     # list[PendingConfirmation], qué decir
     estado = pyqtSignal(str, str, str)      # etapa, herramienta, dato
 
     def __init__(self, agent: Agent, conv: Conversation, awareness: Awareness) -> None:
@@ -111,9 +118,12 @@ class _Worker(QObject):
         respuesta = self.agent.run(prompt, self.conv.history(), mensaje)
 
         self.conv.add_user(mensaje)
-        if respuesta.pending is not None:
+        if respuesta.pendientes:
+            # El texto ya cuenta lo que se hizo Y pregunta por lo que
+            # falta: se compone en el agente para no gastar otra vuelta
+            # al modelo con el usuario esperando.
             self.conv.add_assistant(respuesta.text)
-            self.pendiente.emit(respuesta.pending)
+            self.pendiente.emit(respuesta.pendientes, respuesta.text)
             return
         self.conv.add_assistant(respuesta.text)
         self.listo.emit(respuesta.text, respuesta.tools_used, respuesta.ya_dicho)
@@ -222,6 +232,7 @@ class Nova(QObject):
             on_interrupcion=self._voz_interrumpe.emit,
             on_nada=self._voz_nada.emit,
             seguimiento_s=CONFIG.seguimiento_s,
+            espera_respuesta_s=CONFIG.espera_respuesta_s,
             interrumpir=CONFIG.interrumpir,
         )
         self._voz_despierta.connect(self._al_despertar)
@@ -247,7 +258,7 @@ class Nova(QObject):
         self._worker.estado.connect(self._al_estado)
         self._worker.frase.connect(self._al_frase)
 
-        self._pendiente: PendingConfirmation | None = None
+        self._pendientes: list[PendingConfirmation] = []
         self._ocupada = False
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
@@ -323,7 +334,6 @@ class Nova(QObject):
         self.speaker.shut_up()
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
-        self._modo_ligero = False
         self.ui.set_estado("escucha")
 
     def _al_nada(self) -> None:
@@ -542,20 +552,34 @@ class Nova(QObject):
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
-        self._modo_ligero = False
 
         # ¿Está contestando a una confirmación pendiente?
-        if self._pendiente is not None:
+        if self._pendientes:
             primera = texto.strip().lower().split()[:1]
-            if primera and primera[0].strip(".,!¡") in _AFIRMA:
-                pendiente, self._pendiente = self._pendiente, None
+            palabra = primera[0].strip(".,!¡") if primera else ""
+            if palabra in _AFIRMA:
+                pendiente = self._pendientes.pop(0)
+                self.listener.esperar_respuesta(False)
                 self.ui.set_estado("pensando")
                 self._ocupada = True
                 self._confirmar.emit(pendiente)
                 return
-            self._pendiente = None
-            self._decir("Vale, lo dejo.")
-            return
+            if palabra in _NIEGA:
+                # Un «no» tumba ESA acción, no las demás de la cadena.
+                self._pendientes.pop(0)
+                if self._pendientes:
+                    self._preguntar_siguiente(previo="Vale, eso lo dejo.")
+                else:
+                    self.listener.esperar_respuesta(False)
+                    self._decir("Vale, lo dejo.")
+                return
+            # Ni sí ni no: es otra cosa. Se descarta lo pendiente (no
+            # contestar a una pregunta es no darle permiso) pero lo que
+            # ha dicho SE PROCESA. Tirar su frase y responder "vale, lo
+            # dejo" era perder una orden entera sin avisar.
+            log.info("no era un sí ni un no: dejo lo pendiente y atiendo %r", texto)
+            self._pendientes = []
+            self.listener.esperar_respuesta(False)
 
         self.ui.set_estado("pensando")
         self._ocupada = True
@@ -567,7 +591,6 @@ class Nova(QObject):
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
-        self._modo_ligero = False
         if not self._ocupada:
             self.ui.set_estado("dormida")
         if motivo == "despedida":
@@ -601,19 +624,40 @@ class Nova(QObject):
         self.listener.marcar_turno()
         self.ui.turno_terminado()
         self.ui.set_respondido(texto)
+        if self._pendientes:
+            # Quedaban más acciones esperando permiso en la misma orden.
+            self._preguntar_siguiente(previo=texto)
+            return
+        self.listener.esperar_respuesta(False)
         if ya_dicho:
             # Se fue diciendo mientras se generaba. Repetirla entera
             # ahora sería, literalmente, decirlo todo dos veces.
             return
         self._decir(texto)
 
-    def _al_pendiente(self, pendiente: object) -> None:
+    def _al_pendiente(self, pendientes: object, texto: str) -> None:
         self._ocupada = False
         self.listener.marcar_turno()
         self.ui.turno_terminado()
-        self._pendiente = pendiente  # type: ignore[assignment]
-        resumen = getattr(pendiente, "summary", "")
-        self._decir(f"¿Confirmas que quiero {resumen}?" if resumen else "¿Lo confirmo?")
+        self._pendientes = list(pendientes)  # type: ignore[arg-type]
+        # Ha hecho una pregunta: no puede dormirse antes de oír la
+        # respuesta. Sin esto, NOVA preguntaba, se dormía a los 20 s, y
+        # el «sí» del usuario llegaba a una NOVA que ya no sabía de qué
+        # le hablaban.
+        self.listener.esperar_respuesta(True)
+        self._decir(texto)
+
+    def _preguntar_siguiente(self, *, previo: str = "") -> None:
+        """Pregunta por la siguiente acción que quedó esperando permiso."""
+        if not self._pendientes:
+            self.listener.esperar_respuesta(False)
+            if previo:
+                self._decir(previo)
+            return
+        resumen = getattr(self._pendientes[0], "summary", "")
+        pregunta = f"¿Confirmas que quiero {resumen}?" if resumen else "¿Lo confirmo?"
+        self.listener.esperar_respuesta(True)
+        self._decir(f"{previo} {pregunta}".strip())
 
     # ── Salida ───────────────────────────────────────────────────────
 
