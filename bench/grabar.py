@@ -34,13 +34,17 @@ RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ.parent))
 
 from nova.voice.audio import (  # noqa: E402
+    FRACCION_VOZ_MINIMA,
     SAMPLE_RATE,
     a_int16,
+    diagnostico_de_voz,
+    fraccion_en_banda_de_voz,
     hay_senal,
     pico,
     remuestrear,
     rms,
     tasa_de_captura,
+    tramo_hablado,
 )
 
 FRASES = RAIZ / "frases.txt"
@@ -141,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     if captura != SAMPLE_RATE:
         print(f"  Capturando a {captura} Hz y bajando a {SAMPLE_RATE} Hz aquí.")
     umbral = _umbral(args.device, captura)
+    bandas: list[float] = []
 
     i = max(1, args.desde)
     while i <= len(frases):
@@ -165,13 +170,36 @@ def main(argv: list[str] | None = None) -> int:
             print("    ! demasiado corta, seguramente se cortó. Repite.\n")
             continue
 
+        problema = diagnostico_de_voz(senal)
+        banda = fraccion_en_banda_de_voz(tramo_hablado(senal))
+        bandas.append(banda)
+
         _guardar(senal, destino)
         print(f"    ✓ {segundos:.1f}s   RMS {rms(senal):.4f}   pico {pico(senal):.3f}"
-              f"   → {destino.name}\n")
+              f"   voz {banda * 100:.0f}%   → {destino.name}")
+        if problema:
+            print(f"    ! {problema}")
+        print()
         i += 1
 
     grabadas = len(list(DESTINO.glob(f"*_{args.sufijo}.wav")))
     print(f"\n{grabadas}/{len(frases)} frases grabadas.")
+
+    # La señal fuerte es la mediana de la sesión, no una frase suelta:
+    # las colas de las dos distribuciones se solapan (ver audio.py).
+    if bandas:
+        mediana = float(np.median(bandas))
+        print(f"Energía en la banda de voz: mediana {mediana * 100:.0f}%")
+        if mediana < FRACCION_VOZ_MINIMA:
+            print()
+            print("  ✗ ESTE CORPUS NO SIRVE. Casi toda la energía está por debajo")
+            print("    de la banda de voz: sale retumbe, no habla, y los")
+            print("    reconocedores devolverán basura por mucho que el nivel")
+            print("    parezca correcto.")
+            print("    Prueba otro dispositivo de la lista de `nova.doctor`: el")
+            print("    mismo micro por otra API de audio puede dar otra cosa.")
+            return 1
+
     if grabadas:
         print(f"Ahora:  python bench/bench_stt.py --sufijo {args.sufijo}")
     return 0

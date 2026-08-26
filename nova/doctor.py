@@ -31,14 +31,18 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from .config import CONFIG  # noqa: E402
 from .voice.audio import (  # noqa: E402
+    BANDA_VOZ,
+    FRACCION_VOZ_MINIMA,
     SAMPLE_RATE,
     a_int16,
+    fraccion_en_banda_de_voz,
     hay_senal,
     normalizar,
     pico,
     remuestrear,
     rms,
     tasa_de_captura,
+    tramo_hablado,
 )
 
 BIEN, MAL, AVISO = "✓", "✗", "!"
@@ -173,6 +177,16 @@ def informar_nivel(senal) -> bool:
         print("      reconocedor falla sin motivo aparente. Sube la ganancia.")
     else:
         print(f"  {BIEN} Nivel razonable.")
+
+    # El nivel correcto no garantiza nada: el corpus del 26/08 se grabó
+    # con RMS 0.015-0.026 y picos sanos, y era inservible.
+    banda = fraccion_en_banda_de_voz(tramo_hablado(senal))
+    print(f"  Energía en la banda de voz ({BANDA_VOZ[0]}-{BANDA_VOZ[1]} Hz): {banda * 100:.0f}%")
+    if banda < FRACCION_VOZ_MINIMA:
+        print(f"  {AVISO} Casi todo lo que entra está por debajo de la banda de voz.")
+        print("      Suena a retumbe, no a habla, y el reconocedor devolverá")
+        print("      basura aunque el nivel parezca perfecto. Prueba el mismo")
+        print("      micro por otra API de audio de la lista de arriba.")
     return True
 
 

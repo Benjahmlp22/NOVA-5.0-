@@ -79,6 +79,88 @@ def de_int16(datos: bytes) -> np.ndarray:
     return np.frombuffer(datos, dtype="<i2").astype(np.float32) / 32768.0
 
 
+# ── ¿Esto suena a voz? ───────────────────────────────────────────────
+#
+# Que haya señal y que el nivel sea correcto NO garantiza que sirva. El
+# 26/08 el corpus entero se grabó con nivel perfecto (RMS 0.015-0.026,
+# picos sanos) y los dos reconocedores devolvieron basura: el 67-81% de
+# la energía del tramo hablado estaba por debajo de 300 Hz, contra un
+# 17-32% en audio que sí se transcribe. Nada avisó hasta las 20 frases.
+
+# La banda donde vive la inteligibilidad. El teléfono lleva un siglo
+# usando 300-3400 Hz porque es donde están los formantes que distinguen
+# una palabra de otra.
+BANDA_VOZ = (300, 3400)
+
+# Por debajo de esto, el tramo hablado es retumbe con algo de voz dentro.
+#
+# Medido sobre 20 frases de cada tipo el 26/08:
+#
+#     audio que se transcribe bien   min 34.8%   mediana 53.0%   max 82.7%
+#     audio que dio basura           min 14.2%   mediana 21.2%   max 66.2%
+#
+# Las colas se solapan, así que esto es un olor, no un veredicto: una
+# frase suelta por debajo del umbral puede ser normal. Lo que no es
+# normal es que la MEDIANA de una sesión entera caiga aquí — de ahí que
+# el grabador avise también al final, que es la señal fuerte.
+FRACCION_VOZ_MINIMA = 0.30
+
+
+def fraccion_en_banda_de_voz(senal: np.ndarray, sr: int = SAMPLE_RATE) -> float:
+    """Qué parte de la energía cae en 300-3400 Hz."""
+    if senal.size < 256:
+        return 0.0
+    ventana = senal * np.hanning(senal.size)
+    espectro = np.abs(np.fft.rfft(ventana)) ** 2
+    freqs = np.fft.rfftfreq(senal.size, 1 / sr)
+    total = float(espectro.sum())
+    if total <= 0:
+        return 0.0
+    dentro = (freqs >= BANDA_VOZ[0]) & (freqs < BANDA_VOZ[1])
+    return float(espectro[dentro].sum() / total)
+
+
+def tramo_hablado(senal: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
+    """Recorta el silencio de los extremos.
+
+    Medir las bandas sobre el fichero entero no vale: el silencio pesa
+    más que la voz y su ruido de baja frecuencia domina el espectro. Es
+    un error que ya cometí una vez analizando esto.
+    """
+    bloque = max(1, sr // 20)  # 50 ms
+    if senal.size < bloque * 2:
+        return senal
+    niveles = np.array([
+        np.sqrt(np.mean(senal[i:i + bloque] ** 2))
+        for i in range(0, senal.size - bloque, bloque)
+    ])
+    if niveles.max() <= 0:
+        return senal
+    activos = np.where(niveles >= niveles.max() * 0.25)[0]
+    if activos.size == 0:
+        return senal
+    return senal[activos[0] * bloque:(activos[-1] + 1) * bloque]
+
+
+def diagnostico_de_voz(senal: np.ndarray, sr: int = SAMPLE_RATE) -> str:
+    """Devuelve el problema encontrado, o "" si el audio tiene buena pinta."""
+    if senal.size == 0:
+        return "no hay audio"
+    if not hay_senal(senal):
+        return "silencio digital: el micro no entrega nada"
+
+    voz = tramo_hablado(senal, sr)
+    fraccion = fraccion_en_banda_de_voz(voz, sr)
+    if fraccion < FRACCION_VOZ_MINIMA:
+        return (
+            f"sólo el {fraccion * 100:.0f}% de la energía está en la banda de voz "
+            f"({BANDA_VOZ[0]}-{BANDA_VOZ[1]} Hz); suena a retumbe, no a habla"
+        )
+    if rms(voz) < 0.005:
+        return "nivel demasiado bajo: la consonante se pierde bajo el ruido"
+    return ""
+
+
 # ── Captura y remuestreo ─────────────────────────────────────────────
 #
 # WASAPI en modo compartido SÓLO abre el micro a su tasa nativa: pedirle

@@ -145,3 +145,66 @@ def test_senal_vacia_se_remuestrea_sin_romperse():
     from nova.voice.audio import remuestrear
 
     assert remuestrear(np.zeros(0, dtype=np.float32), 48000, 16000).size == 0
+
+
+# ── "Hay señal y buen nivel" no significa "sirve" ────────────────────
+#
+# El corpus del 26/08 se grabó con RMS 0.015-0.026 y picos sanos, y los
+# dos reconocedores devolvieron basura: el 67-81% de la energía del tramo
+# hablado estaba por debajo de 300 Hz. Nada avisó hasta las 20 frases.
+
+def _voz_falsa(sr=16000, segundos=1.0, graves=1.0, medios=1.0):
+    """Mezcla de un retumbe grave y contenido en la banda de voz."""
+    t = np.linspace(0, segundos, int(sr * segundos), endpoint=False)
+    grave = graves * np.sin(2 * np.pi * 120 * t)
+    medio = medios * sum(np.sin(2 * np.pi * hz * t) for hz in (600, 1200, 2400))
+    return (0.2 * (grave + medio)).astype(np.float32)
+
+
+def test_audio_con_banda_de_voz_sana_pasa():
+    from nova.voice.audio import diagnostico_de_voz
+
+    assert diagnostico_de_voz(_voz_falsa(graves=0.3, medios=1.0)) == ""
+
+
+def test_retumbe_sin_voz_se_detecta():
+    from nova.voice.audio import diagnostico_de_voz
+
+    problema = diagnostico_de_voz(_voz_falsa(graves=8.0, medios=0.05))
+    assert "banda de voz" in problema
+
+
+def test_silencio_digital_se_detecta_antes_que_nada():
+    from nova.voice.audio import diagnostico_de_voz
+
+    assert "silencio digital" in diagnostico_de_voz(np.zeros(16000, dtype=np.float32))
+
+
+def test_tramo_hablado_recorta_el_silencio():
+    """Medir las bandas sobre el fichero entero no vale.
+
+    El silencio pesa más que la voz y su ruido de baja frecuencia domina
+    el espectro — error que ya se cometió una vez analizando esto.
+    """
+    from nova.voice.audio import tramo_hablado
+
+    voz = _voz_falsa(segundos=0.5)
+    con_silencio = np.concatenate([
+        np.zeros(16000, dtype=np.float32), voz, np.zeros(16000, dtype=np.float32)
+    ])
+    recortado = tramo_hablado(con_silencio)
+    assert len(recortado) < len(con_silencio) / 2
+    assert rms(recortado) > rms(con_silencio)
+
+
+def test_fraccion_en_banda_de_voz_es_una_fraccion():
+    from nova.voice.audio import fraccion_en_banda_de_voz
+
+    f = fraccion_en_banda_de_voz(_voz_falsa())
+    assert 0.0 <= f <= 1.0
+
+
+def test_senal_muy_corta_no_revienta():
+    from nova.voice.audio import fraccion_en_banda_de_voz
+
+    assert fraccion_en_banda_de_voz(np.zeros(10, dtype=np.float32)) == 0.0
