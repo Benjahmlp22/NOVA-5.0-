@@ -180,6 +180,13 @@ class Config:
     interrumpir: bool = field(default_factory=lambda: _env_bool("NOVA_INTERRUMPIR", True))
     # Segundos de silencio tras despertar antes de volver a dormir.
     awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "20")))
+    # Cuánto aguanta despierta cuando ha preguntado algo y espera tu
+    # respuesta. Un minuto: lo que tardas en mirar la pantalla, pensarlo
+    # y contestar. Los 20 s normales se le quedaban cortos justo cuando
+    # más importaba — pedía permiso y se dormía antes del "sí".
+    espera_respuesta_s: float = field(
+        default_factory=lambda: float(_env("NOVA_ESPERA_RESPUESTA", "60"))
+    )
     tts_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_TTS", True))
     tts_rate: int = field(default_factory=lambda: int(_env("NOVA_TTS_RATE", "195")))
     chime_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_CHIME", True))

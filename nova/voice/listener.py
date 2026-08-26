@@ -126,6 +126,7 @@ class VoiceListener:
         silencio_fin_s: float = 0.7,
         max_enunciado_s: float = 12.0,
         seguimiento_s: float = 8.0,
+        espera_respuesta_s: float = 60.0,
         interrumpir: bool = True,
         on_wake: Callable[[bool], None] | None = None,
         on_command: Callable[[str], None] | None = None,
@@ -145,6 +146,7 @@ class VoiceListener:
         self.exclusivo = exclusivo
 
         self.awake_timeout_s = awake_timeout_s
+        self.espera_respuesta_s = espera_respuesta_s
         self.preroll_s = preroll_s
         self.silencio_fin_s = silencio_fin_s
         self.max_enunciado_s = max_enunciado_s
@@ -180,6 +182,9 @@ class VoiceListener:
         # de seguimiento: te acaba de decir "dime" y estás pensando qué
         # pedirle. Sin esto NOVA te ignoraba a media frase.
         self._esperando_orden = False
+        # NOVA ha hecho una pregunta y espera respuesta. Mientras dure,
+        # ni se duerme ni exige que la vuelvas a nombrar.
+        self._esperando_respuesta_hasta = 0.0
         self.error = ""
 
         # Búfer circular: el último segundo, siempre. Se dimensiona en
@@ -267,6 +272,29 @@ class VoiceListener:
         self._bloques_hablando_encima += 1
         return self._bloques_hablando_encima >= BLOQUES_INTERRUPCION
 
+    def esperar_respuesta(self, si: bool = True) -> None:
+        """NOVA acaba de preguntar algo: aguanta despierta hasta la respuesta.
+
+        Sin esto pasaba lo absurdo: pedía confirmación, se dormía a los
+        20 s de silencio mientras el usuario pensaba, y el «sí» llegaba a
+        una NOVA que ya no recordaba de qué iba. Tener que decir «nova,
+        sí» para contestar a una pregunta que te acaba de hacer ella no
+        tiene ningún sentido.
+
+        Con tope, eso sí: si nadie contesta en `espera_respuesta_s`, se
+        duerme igual. Una pregunta sin respuesta no puede dejar el micro
+        abierto para siempre.
+        """
+        self._esperando_respuesta_hasta = (
+            time.monotonic() + self.espera_respuesta_s if si else 0.0
+        )
+
+    def _esperando_algo(self) -> bool:
+        """¿Hay algo por lo que NO deba dormirse ahora mismo?"""
+        if self._esperando_orden:
+            return True
+        return time.monotonic() < self._esperando_respuesta_hasta
+
     def _en_seguimiento(self) -> bool:
         """¿Sigue abierto el turno como para hablarle sin decir su nombre?
 
@@ -285,7 +313,7 @@ class VoiceListener:
         ese rato sigue DESPIERTA (no hace falta volver a esperar el
         chime), pero para hablarle hay que volver a nombrarla.
         """
-        if self._esperando_orden:
+        if self._esperando_algo():
             return True
         return time.monotonic() - self._ultimo_turno <= self.seguimiento_s
 
@@ -302,6 +330,7 @@ class VoiceListener:
         if self._awake:
             self._awake = False
             self._esperando_orden = False
+            self._esperando_respuesta_hasta = 0.0
             self._on_sleep(motivo)
 
     # ── Ciclo de vida ────────────────────────────────────────────────
@@ -460,7 +489,11 @@ class VoiceListener:
                 # desde el último ruido. Contándolo desde el ruido, una
                 # tele o un juego de fondo la mantenían despierta para
                 # siempre, y despierta responde a lo que oiga.
-                if self._awake and time.monotonic() - self._ultimo_turno > self.awake_timeout_s:
+                if (
+                    self._awake
+                    and not self._esperando_algo()
+                    and time.monotonic() - self._ultimo_turno > self.awake_timeout_s
+                ):
                     self.sleep_now("silencio")
 
                 nivel = rms(bloque)

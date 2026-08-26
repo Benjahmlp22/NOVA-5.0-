@@ -7,6 +7,7 @@ manda al cerebro. La captura de audio y los modelos se inyectan.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
@@ -376,3 +377,46 @@ def test_se_puede_apagar_del_todo():
     oyente.nivel_salida(0.0)
     for _ in range(20):
         assert not oyente._me_estan_interrumpiendo(0.5)
+
+
+# ── Preguntar y dormirse antes de la respuesta ───────────────────────
+#
+# El absurdo que había: NOVA pedía permiso, el usuario se paraba a
+# pensar, y a los 20 s de silencio ella se dormía. Contestar "sí" a una
+# pregunta que te acaba de hacer no puede exigir volver a nombrarla.
+
+def test_mientras_espera_respuesta_no_se_le_agota_el_tiempo():
+    oyente, _ = _oyente(awake_timeout_s=20.0)
+    oyente._awake = True
+    oyente._ultimo_turno = time.monotonic() - 999   # hace un siglo del turno
+    assert oyente._esperando_algo() is False
+
+    oyente.esperar_respuesta(True)
+    assert oyente._esperando_algo() is True
+    # Y le puedes contestar sin repetir el nombre.
+    assert oyente._en_seguimiento() is True
+
+
+def test_al_contestar_se_suelta_la_espera():
+    oyente, _ = _oyente()
+    oyente._awake = True
+    oyente.esperar_respuesta(True)
+    oyente.esperar_respuesta(False)
+    assert oyente._esperando_algo() is False
+
+
+def test_la_espera_tiene_tope():
+    """Una pregunta sin contestar no puede dejar el micro abierto siempre."""
+    oyente, _ = _oyente(espera_respuesta_s=0.0)
+    oyente._awake = True
+    oyente.esperar_respuesta(True)
+    assert oyente._esperando_algo() is False
+
+
+def test_dormirse_a_la_fuerza_cancela_la_espera():
+    oyente, eventos = _oyente()
+    oyente._awake = True
+    oyente.esperar_respuesta(True)
+    oyente.sleep_now("adios")
+    assert oyente._esperando_algo() is False
+    assert ("dormir", "adios") in eventos
