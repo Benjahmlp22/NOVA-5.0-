@@ -7,6 +7,8 @@ estados distintos.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from nova.core.agent import _dato_visible
@@ -133,3 +135,70 @@ def test_los_tipos_de_accion_tienen_color():
 
 def test_el_recorte_de_detalle_es_razonable():
     assert 20 <= MAX_DETALLE <= 60
+
+
+# ── El borde de la pantalla ──────────────────────────────────────────
+#
+# Esto SÍ se pinta de verdad, en una imagen fuera de pantalla, porque lo
+# que puede romperse aquí sólo se ve en los píxeles: que un cambio de
+# opacidad tape el juego, o que quede una costura entre tramos.
+
+def _pintar_borde(ancho: int = 1920, alto: int = 1080):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PyQt5.QtWidgets")
+    from PyQt5.QtGui import QImage
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    from nova.ui.glow import GlowBorder
+
+    borde = GlowBorder()
+    borde.resize(ancho, alto)
+    borde._intensidad = 1.0
+    borde._activo = True
+    borde._fase = math.pi / 2  # el pico del latido: el peor caso
+    img = QImage(ancho, alto, QImage.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    borde.render(img)
+    return img
+
+
+def _alfa(img, x: int, y: int) -> int:
+    return (img.pixel(x, y) >> 24) & 0xFF
+
+
+def test_el_borde_no_tapa_el_centro_de_la_pantalla():
+    """Lo de siempre que puede romperse: dejar de ser transparente."""
+    img = _pintar_borde()
+    assert _alfa(img, 960, 540) == 0
+
+
+def test_las_esquinas_pesan_mas_que_el_centro_de_los_lados():
+    img = _pintar_borde()
+    esquina = _alfa(img, 0, 0)
+    centro_del_lado = _alfa(img, 960, 0)
+    assert esquina > centro_del_lado * 2
+
+
+def test_el_borde_no_llega_a_tapar_lo_que_hay_debajo():
+    """En las esquinas se cruzan dos lados y la opacidad se acumula.
+
+    Si esto sube, deja de ser un aviso periférico y pasa a ser una
+    ventana encima del juego.
+    """
+    img = _pintar_borde()
+    pico = max(_alfa(img, x, y) for x in (0, 1919) for y in (0, 1079))
+    assert pico <= 0.60 * 255
+
+
+def test_no_quedan_costuras_entre_tramos():
+    """Se pinta por tramos; un salto grande sería una raya visible.
+
+    El límite es 6/255: medido, el mayor salto real es 5 y está en la
+    pendiente de la esquina (x=1..7), no en las juntas.
+    """
+    img = _pintar_borde()
+    fila = [_alfa(img, x, 0) for x in range(1920)]
+    saltos = [abs(fila[i + 1] - fila[i]) for i in range(len(fila) - 1)]
+    assert max(saltos) <= 6
