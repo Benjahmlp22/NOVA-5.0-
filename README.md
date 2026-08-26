@@ -117,23 +117,24 @@ mismo audio y el mismo remuestreo para todos.
 |---|---|---|---|---|
 | Vosk `es-0.42` | 17.9 % | 10/20 | 0.76 s | — (CPU) |
 | faster-whisper `small` | 16.1 % | 10/20 | 0.30 s | 365 MiB |
-| faster-whisper `small` + vocabulario | 10.2 % | 13/20 | 0.31 s | 365 MiB |
+| faster-whisper `small` + vocabulario | 9.3 % | 11/20 | 0.32 s | 365 MiB |
 | faster-whisper `medium` | 12.9 % | 13/20 | 0.63 s | 924 MiB |
-| **faster-whisper `medium` + vocabulario** | **6.5 %** | **16/20** | 0.63 s | 924 MiB |
+| **faster-whisper `medium` + vocabulario** | **3.5 %** | **17/20** | 0.50 s | 924 MiB |
 | faster-whisper `large-v3-turbo` | 24.1 % | 8/20 | 0.61 s | 1024 MiB |
 | faster-whisper `large-v3-turbo` + vocabulario | 19.1 % | 9/20 | 0.56 s | 1024 MiB |
 
-**Gana `medium` con vocabulario**: 2.7× menos error que Vosk y 2.5× menos
-que `small` a secas, por 0.3 s más de latencia y 560 MiB de VRAM que en
-una tarjeta de 12 GB sobran.
+**Gana `medium` con vocabulario**: 3.5 % de WER es 5× menos error que Vosk
+y 4.6× menos que `small` a secas, por 0.2 s más de latencia y 560 MiB de
+VRAM que en una tarjeta de 12 GB sobran. Para poner ese 3.5 % en escala:
+es mejor de lo que daba Vosk sobre voz sintética perfecta (6.1 %).
 
 **El "+ vocabulario" es la mitad del resultado y sale gratis.** Es un
 `initial_prompt` con las palabras que NOVA oye todos los días — Discord,
 Spotify, bloc de notas, RTX 4070, vatios — que el decodificador ve como
 contexto previo. Sin él, Whisper escribía "blog de notas", "calor
-favorito" y "cuánta **de morir a** RAM". Baja el WER de 16.1 % a 10.2 %
-en `small` y de 12.9 % a 6.5 % en `medium`, **sin coste de latencia
-medible**. No hay ninguna frase del corpus dentro del prompt.
+favorito" y "cuánta **de morir a** RAM". Baja el WER de 16.1 % a 9.3 % en
+`small` y de 12.9 % a 3.5 % en `medium`, **sin coste de latencia**. No hay
+ninguna frase del corpus dentro del prompt.
 
 `large-v3-turbo` es el peor de los tres, con y sin vocabulario. Más
 grande no es más listo cuando las frases son órdenes de cinco palabras.
@@ -154,6 +155,58 @@ subas de small". Con voz real, `medium` gana claramente. El audio
 sintético sirvió para lo que tenía que servir —comprobar que
 faster-whisper funciona en la 3060 sin necesitar micrófono— y **su
 conclusión sobre qué modelo usar era falsa**.
+
+## El wake word: por qué "NOVA" es difícil en español
+
+`nova` y `no va` son **la misma secuencia de fonemas**. Ningún modelo
+acústico puede separarlas; sólo el contexto de lenguaje puede. Eso
+explica el parche de NOVA4, que acepta `no\s+va` como variante del nombre
+porque Vosk transcribía así el nombre — y explica también lo que cuesta.
+
+Medido el 26/08 sobre 14 frases grabadas: 8 diciendo "nova" y 6 trampas
+("no va a funcionar el mando", "la novia de mi hermano", "esto no va a
+salir bien").
+
+| detector | despierta | falsas alarmas | carga |
+|---|---|---|---|
+| Vosk `es-0.42` + patrón de NOVA4 | 4/8 | 4/6 | 34.2 s |
+| Vosk `small` + patrón de NOVA4 | 5/8 | 3/6 | 0.6 s |
+| Vosk `small` + gramática `["nova"]` | **8/8** | 5/6 | 0.6 s |
+| Vosk `small` + gramática con señuelos | 4/8 | 1/6 | 0.6 s |
+| **faster-whisper `small` + prompt del nombre** | **8/8** | **0/6** | 2.2 s |
+| faster-whisper `medium` + prompt del nombre | 8/8 | 1/6 | 4.5 s |
+
+Tres cosas que salen de ahí:
+
+**El modelo grande es PEOR que el pequeño**, en las dos columnas, y
+además no soporta gramática restringida ("Runtime graphs are not
+supported by this model"). Los 2.3 GB y los 47 s de arranque no compran
+nada para esta tarea.
+
+**Con Vosk sólo hay balancín, no solución.** Gramática permisiva: 8/8
+aciertos y 5/6 falsas. Gramática con señuelos: 1/6 falsas pero 4/8
+aciertos. Es lo que pasa cuando pides separar dos cosas idénticas.
+
+**Whisper sí lo resuelve, porque tiene contexto de lenguaje.** Con el
+nombre en el prompt como nombre ("NOVA, abre Discord"), distingue las 8
+de las 6 sin fallar ninguna.
+
+De ahí sale la arquitectura de dos etapas, y la etapa 1 deja de ser el
+problema para ser sólo una puerta barata:
+
+    Etapa 1   Vosk small + gramática ["nova"]      58 MB, carga 0.6 s
+              8/8 de recall. Salta de más a propósito: sólo abre la
+              puerta, no decide nada.
+
+    Etapa 2   faster-whisper medium + prompt        924 MiB, 0.50 s
+              Confirma que el nombre estaba de verdad Y transcribe la
+              orden en la misma pasada. Si no estaba, NOVA vuelve a
+              dormir sin haber hecho ruido.
+
+El coste de que la etapa 1 salte de más es una pasada de Whisper de
+0.5 s sin efecto visible — no suena el chime hasta que la etapa 2
+confirma. A cambio desaparecen el parche de `no va`, los 47 s de arranque
+y las 4 falsas alarmas de cada 6.
 
 ## Presupuesto de recursos
 

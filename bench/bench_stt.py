@@ -187,8 +187,17 @@ def correr_vosk(senales: list, referencias: list[str], modelo: Path) -> Resultad
 # verdad a este asistente, y un asistente que no conoce los nombres de
 # las apps que abre no sirve. Lo que sí sería trampa es meter aquí las
 # frases del corpus, y no está ninguna.
+#
+# Lleva además el nombre en contexto de nombre ("NOVA, abre Discord"), y
+# eso no es adorno: "nova" y "no va" son la MISMA secuencia de fonemas en
+# español, así que ningún modelo acústico puede separarlas — sólo el
+# contexto. Con este prompt, Whisper small distingue las 8 frases con
+# "nova" de las 6 trampas ("no va a funcionar el mando", "la novia de mi
+# hermano") sin fallar ninguna. Vosk, que no tiene contexto de lenguaje,
+# no pasa de 5/8 con 3 falsas alarmas.
 PROMPT_DOMINIO = (
-    "Órdenes habladas a un asistente de escritorio en español. "
+    "Órdenes habladas al asistente NOVA en español. Se le llama por su "
+    "nombre: NOVA, abre Discord. NOVA, qué hora es. Oye, NOVA. "
     "Vocabulario habitual: Discord, Chrome, Spotify, Steam, WhatsApp, "
     "Visual Studio Code, bloc de notas, captura de pantalla, memoria RAM, "
     "volumen, RTX 4070, vatios, fuente de alimentación, carpeta, archivo."
