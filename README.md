@@ -31,7 +31,7 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Repo con historial revisable | **hecho** — NOVA4 no tenía git, y era su mayor debilidad |
 | Barrido de bugs de NOVA4 | **hecho** — ver "Lo que se arregló" |
 | Logs con niveles y `--debug` | **hecho** |
-| faster-whisper en la RTX 3060 | **verificado** — 1.6 % WER, 0.28 s/frase, 365 MiB |
+| faster-whisper en la RTX 3060 | **verificado** — 3.5 % WER con voz real, 0.50 s/frase |
 | STT en dos etapas dentro de la app | **hecho** |
 | `python -m nova.doctor` | **hecho** |
 | Banco de pruebas WER + grabador de corpus | **hecho** |
@@ -39,6 +39,7 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Panel abajo a la derecha | pendiente |
 | Búsqueda en internet | pendiente |
 | Presupuesto de RAM/VRAM medido | **hecho** |
+| Latencia punta a punta < 1,5 s | **NO** — ver su sección |
 
 ## Qué necesitas
 
@@ -62,6 +63,10 @@ y descomprímelo en `models/vosk/`.
 pip install -r requirements.txt
 python run.py
 ```
+
+Tarda unos 8 segundos en estar escuchando: casi todo es cargar Whisper en
+la GPU. **Arráncala siempre con `run.py`** y no importando `nova.app` a
+mano — el orden de carga importa y está explicado en `nova/bootstrap.py`.
 
 Con el detalle completo al fichero de log (`data/nova.log`), que es lo
 que hace falta cuando el audio se porta raro:
@@ -156,6 +161,43 @@ subas de small". Con voz real, `medium` gana claramente. El audio
 sintético sirvió para lo que tenía que servir —comprobar que
 faster-whisper funciona en la 3060 sin necesitar micrófono— y **su
 conclusión sobre qué modelo usar era falsa**.
+
+## Latencia de punta a punta: el objetivo NO se cumple
+
+Se fijó como criterio "menos de 1,5 s desde que dejas de hablar hasta la
+primera sílaba de NOVA". **No se cumple, y no está cerca.** Medido el
+26/08 con todo montado:
+
+| tramo | tiempo |
+|---|---|
+| detectar que has terminado de hablar (silencio) | 0.70 s |
+| etapa 2: Whisper `medium` en la 3060 | 0.50 – 0.84 s |
+| cerebro: Ollama `qwen3.5:4b` + herramientas | 0.33 – 2.66 s |
+| arrancar el motor SAPI y empezar a sonar | ~1.40 s |
+| **total** | **≈ 3 – 5.6 s** |
+
+Dónde está el margen, en orden de lo que más devuelve:
+
+**El motor de TTS (1.4 s).** Se crea uno nuevo por frase, y hay un motivo
+—reutilizarlo hace que sólo suene la primera, ver `voice/speaker.py`—
+pero el motor se puede tener creado y esperando en vez de construirlo
+cuando ya hay algo que decir.
+
+**El silencio (0.7 s).** Bajarlo es gratis en trabajo y caro en calidad:
+por debajo de ~0.5 s corta a mitad de frase, porque una coma ya da 0.4 s
+de pausa. Es un `NOVA_SILENCIO_FIN` en el `.env` para quien quiera
+probarlo.
+
+**El cerebro (hasta 2.66 s).** Ahora mismo se espera a la respuesta
+entera antes de empezar a hablar. Con la respuesta en streaming se
+podría arrancar el TTS con la primera frase, que es donde está el grueso
+de la mejora percibida.
+
+**Whisper (0.5-0.84 s).** Bajar a `small` lo deja en ~0.3 s a cambio de
+casi triplicar el error (9.3 % contra 3.5 %). Mal negocio.
+
+Nada de esto está hecho. Queda escrito aquí y no en un TODO perdido
+porque el criterio se anunció y no se ha cumplido.
 
 ## El wake word: por qué "NOVA" es difícil en español
 
