@@ -162,9 +162,24 @@ de superficie y no lo era.
 
 Todo con test que falla antes y pasa después.
 
-- **42 s sorda al arrancar.** `Model(...)` de Vosk se llamaba en el hilo
-  de Qt (medido en el log del 25/07: 23:09:36 → 23:10:18). Ahora en su
-  hilo, con aviso por `on_ready` / `on_error`.
+- **La interfaz se congelaba al arrancar.** `Model(...)` de Vosk se
+  llamaba en el hilo de Qt. Ahora `start()` vuelve en **0 ms** y la carga
+  ocurre en el hilo de voz.
+
+  Lo que ese arreglo **no** resuelve: NOVA sigue sin oír hasta que el
+  modelo termina de cargar. Medido el 26/08 en esta máquina:
+
+  | Modelo de voz | Tamaño | Carga | Listo para oír |
+  |---|---|---|---|
+  | `vosk-model-es-0.42` | 2.3 GB | 47.2 s | 47.8 s |
+  | `vosk-model-small-es-0.42` | 58 MB | 0.4 s | **0.98 s** |
+
+  Son 48× de diferencia. El grande se usa porque el small detectaba peor
+  el wake word — probado en su día, no supuesto. La decisión queda
+  pendiente de la Fase 2, donde se mide la tasa de acierto de los dos
+  sobre frases reales; hasta entonces manda la detección y se paga el
+  arranque. Al menos ahora se ve: el orbe está en "preparando", no en
+  "dormida".
 - **El filtro de coletillas se había quedado atrás.** Reproducido en el
   smoke del 26/08: 4 de 7 respuestas acabaron en coletilla y ninguna se
   filtró. Faltaban el clítico opcional ("en qué **te** puedo ayudar"),
