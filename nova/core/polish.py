@@ -181,3 +181,42 @@ def recortar_para_voz(
     if recorte and recorte[-1] not in _TERMINADORES:
         recorte += "."
     return recorte
+
+
+def es_relleno(frase: str) -> bool:
+    """¿Esta frase, ella sola, es puro tic de chatbot?
+
+    Hace falta para hablar por frases mientras el modelo aún escribe. El
+    filtro de coletillas mira el FINAL del texto, y con streaming no se
+    sabe cuál va a ser el final hasta que termina: si NOVA suelta la
+    primera frase en cuanto la tiene, puede acabar diciendo en alto un
+    "¿en qué puedo ayudarte?" que el filtro habría quitado.
+
+    Así que antes de decir una frase suelta se le pregunta a los mismos
+    patrones si esa frase aporta algo.
+    """
+    t = (frase or "").strip()
+    if not t:
+        return True
+    limpio = _RELLENO_FINAL.sub(r"\1", t).strip()
+    limpio = _PREGUNTA_DE_AYUDA.sub("", limpio).strip()
+    limpio = _PREGUNTA_VACIA.sub("", limpio).strip()
+    return not limpio.strip(" .,;:!?¿¡…-—")
+
+
+def frases_completas(texto: str) -> tuple[list[str], str]:
+    """Parte lo acumulado en frases cerradas + lo que queda a medias.
+
+    Devuelve sólo las frases que ya tienen su punto: lo demás sigue
+    escribiéndose y decirlo ahora sonaría a corte.
+    """
+    partes = _FIN_DE_FRASE.split(texto or "")
+    if not partes:
+        return [], ""
+    cerradas = [p.strip() for p in partes[:-1] if p.strip()]
+    cola = partes[-1]
+    # La última sólo está cerrada si termina en puntuación fuerte.
+    if cola.strip() and cola.strip()[-1] in _TERMINADORES:
+        cerradas.append(cola.strip())
+        cola = ""
+    return cerradas, cola

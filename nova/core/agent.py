@@ -28,7 +28,7 @@ from typing import Any
 
 from ..llm.ollama import LLMResponse, OllamaClient, OllamaError
 from ..tools.registry import PendingConfirmation, ToolRegistry, ToolResult
-from .polish import pulir
+from .polish import es_relleno, frases_completas, pulir
 
 log = logging.getLogger("nova.agent")
 
@@ -86,6 +86,60 @@ class AgentReply:
     tools_used: list[str] = field(default_factory=list)
     pending: PendingConfirmation | None = None
     rounds: int = 0
+    # Si la respuesta ya se fue diciendo en voz alta mientras se
+    # generaba, quien reciba esto NO debe volver a decirla.
+    ya_dicho: bool = False
+
+
+class _EmisorDeFrases:
+    """Va soltando frases completas mientras el modelo sigue escribiendo.
+
+    Dos reglas, y las dos vienen de fallos concretos:
+
+    Sólo se dicen frases CERRADAS. Decir un trozo a medias suena a corte,
+    y el TTS lo entona como si fuera el final.
+
+    Y una frase que sea puro relleno no se dice, aunque esté cerrada. El
+    filtro de coletillas mira el final del texto completo, y con
+    streaming no se sabe cuál es el final hasta que termina: sin esto,
+    NOVA soltaría en alto un "¿en qué puedo ayudarte?" que el filtro
+    habría quitado un segundo después.
+    """
+
+    def __init__(self, on_frase: Callable[[str], None]) -> None:
+        self._on_frase = on_frase
+        self._buffer = ""
+        self._dicho = ""
+        self.dijo_algo = False
+
+    def recibir(self, trozo: str) -> None:
+        self._buffer += trozo
+        cerradas, cola = frases_completas(self._buffer)
+        for frase in cerradas:
+            self._decir(frase)
+        self._buffer = cola
+
+    def cerrar(self, texto_pulido: str) -> None:
+        """Dice lo que quede del texto final que no se haya dicho ya."""
+        resto = texto_pulido
+        if self._dicho and texto_pulido.startswith(self._dicho):
+            resto = texto_pulido[len(self._dicho):]
+        elif self._dicho:
+            # El pulido cambió algo de lo ya dicho (raro). No se puede
+            # des-decir, así que se calla el resto antes que repetirse.
+            return
+        resto = resto.strip()
+        if resto:
+            self._decir(resto, marcar=False)
+
+    def _decir(self, frase: str, *, marcar: bool = True) -> None:
+        if marcar:
+            self._dicho = f"{self._dicho} {frase}".strip() if self._dicho else frase
+        if es_relleno(frase):
+            log.debug("no digo %r: es relleno", frase)
+            return
+        self.dijo_algo = True
+        self._on_frase(frase)
 
 
 class Agent:
@@ -96,6 +150,7 @@ class Agent:
         *,
         max_rounds: int = 4,
         on_status: Callable[[str, str, str], None] | None = None,
+        on_frase: Callable[[str], None] | None = None,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -104,6 +159,10 @@ class Agent:
         # enseñar "Abriendo Discord" y no sólo "app.open", sin que el
         # agente sepa nada de Qt.
         self._on_status = on_status or (lambda etapa, herramienta, dato: None)
+        # Frases sueltas de la respuesta, según el modelo las termina de
+        # escribir. Es lo que permite empezar a hablar sin esperar al
+        # punto final: hasta 2.66 s de silencio en el peor caso medido.
+        self._on_frase = on_frase
 
     def run(
         self,
@@ -132,17 +191,28 @@ class Agent:
 
         for round_n in range(1, self.max_rounds + 1):
             self._status("thinking" if round_n == 1 else "reasoning")
+            emisor = _EmisorDeFrases(self._on_frase) if self._on_frase else None
             try:
-                resp: LLMResponse = self.llm.chat(messages, tools=schemas)
+                resp: LLMResponse = self.llm.chat(
+                    messages,
+                    tools=schemas,
+                    on_trozo=emisor.recibir if emisor else None,
+                )
             except OllamaError as exc:
                 return AgentReply(text=str(exc), rounds=round_n)
 
             if not resp.tool_calls:
                 self._status("writing")
+                limpio = pulir(resp.text)
+                if emisor:
+                    # Lo ya dicho no se repite; lo que quede del texto
+                    # pulido se dice ahora.
+                    emisor.cerrar(limpio)
                 return AgentReply(
-                    text=pulir(resp.text),
+                    text=limpio,
                     tools_used=used,
                     rounds=round_n,
+                    ya_dicho=bool(emisor and emisor.dijo_algo),
                 )
 
             messages.append(

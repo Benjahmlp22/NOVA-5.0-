@@ -14,9 +14,16 @@ class FakeLLM:
         self.guion = list(guion)
         self.llamadas: list[dict] = []
 
-    def chat(self, messages, tools=None):  # noqa: ANN001
+    def chat(self, messages, tools=None, on_trozo=None):  # noqa: ANN001
         self.llamadas.append({"messages": list(messages), "tools": tools})
-        return self.guion.pop(0)
+        respuesta = self.guion.pop(0)
+        if on_trozo is not None and respuesta.text:
+            # Imita el streaming de Ollama: el texto llega a cachos, y a
+            # cachos que no respetan los límites de frase. Mandarlo de
+            # una pieza no probaría nada de lo que puede salir mal.
+            for i in range(0, len(respuesta.text), 7):
+                on_trozo(respuesta.text[i:i + 7])
+        return respuesta
 
 
 def _registro(policy: str = "solo_peligroso") -> ToolRegistry:
@@ -142,3 +149,71 @@ def test_argumentos_invalidos_se_reportan_sin_crashear():
     reply = Agent(llm, _registro()).run("sys", [], "x")
     assert reply.text == "Me equivoqué."
     assert reply.tools_used == []
+
+
+# ── Hablar mientras el modelo aún escribe ────────────────────────────
+#
+# Empezar a hablar con la primera frase quita hasta un segundo largo de
+# silencio (medido: 1.81 s → 0.50 s en "qué hora es"). Pero abre dos
+# formas de quedar fatal, y las dos están cerradas aquí.
+
+def _agente_con_frases(guion):
+    dichas: list[str] = []
+    agente = Agent(FakeLLM(guion), _registro(), on_frase=dichas.append)
+    return agente, dichas
+
+
+def test_las_frases_se_van_diciendo_segun_se_generan():
+    agente, dichas = _agente_con_frases(
+        [LLMResponse(text="Listo, he abierto Chrome. Ya lo tienes delante.")]
+    )
+    agente.run("sys", [], "abre chrome")
+    assert dichas == ["Listo, he abierto Chrome.", "Ya lo tienes delante."]
+
+
+def test_no_se_dice_una_frase_a_medias():
+    """El TTS entona un trozo cortado como si fuera el final."""
+    agente, dichas = _agente_con_frases([LLMResponse(text="Esto no tiene punto todavía")])
+    agente.run("sys", [], "hola")
+    # Sin puntuación no hay frase cerrada hasta el cierre del turno.
+    assert dichas == ["Esto no tiene punto todavía"]
+
+
+def test_una_coletilla_no_se_cuela_por_ir_deprisa():
+    """El filtro mira el FINAL del texto, y en streaming aún no se sabe.
+
+    Sin comprobar frase a frase, NOVA soltaría en alto un "¿en qué puedo
+    ayudarte?" que el filtro habría quitado un segundo después.
+    """
+    agente, dichas = _agente_con_frases(
+        [LLMResponse(text="Son las diez y media. ¿En qué puedo ayudarte hoy?")]
+    )
+    respuesta = agente.run("sys", [], "que hora es")
+    assert dichas == ["Son las diez y media."]
+    assert "ayudarte" not in respuesta.text
+
+
+def test_lo_ya_dicho_no_se_repite_al_terminar():
+    """Si se dijo mientras se generaba, la app NO debe decirlo otra vez."""
+    agente, dichas = _agente_con_frases([LLMResponse(text="Hecho. Todo listo.")])
+    respuesta = agente.run("sys", [], "haz algo")
+    assert respuesta.ya_dicho
+    assert " ".join(dichas) == respuesta.text
+
+
+def test_sin_streaming_nada_cambia():
+    """El camino de siempre sigue existiendo: la app decide cuál usa."""
+    agente = Agent(FakeLLM([LLMResponse(text="Hecho.")]), _registro())
+    respuesta = agente.run("sys", [], "haz algo")
+    assert respuesta.text == "Hecho."
+    assert not respuesta.ya_dicho
+
+
+def test_una_ronda_de_herramientas_no_habla():
+    """Mientras ejecuta no hay nada que decir: eso llega después."""
+    agente, dichas = _agente_con_frases([
+        LLMResponse(tool_calls=[ToolCall(id="1", name="test_eco", args={"text": "hola"})]),
+        LLMResponse(text="Listo."),
+    ])
+    agente.run("sys", [], "haz eco")
+    assert dichas == ["Listo."]

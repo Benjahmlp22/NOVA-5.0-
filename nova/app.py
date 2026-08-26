@@ -83,7 +83,8 @@ def estado_en_reposo(*, ocupada: bool, despierta: bool) -> str:
 class _Worker(QObject):
     """Ejecuta el turno pesado fuera del hilo de la interfaz."""
 
-    listo = pyqtSignal(str, list)          # texto, herramientas usadas
+    listo = pyqtSignal(str, list, bool)    # texto, herramientas, ya dicho
+    frase = pyqtSignal(str)                # una frase suelta, según se genera
     pendiente = pyqtSignal(object)          # PendingConfirmation
     estado = pyqtSignal(str, str, str)      # etapa, herramienta, dato
 
@@ -105,12 +106,12 @@ class _Worker(QObject):
             self.pendiente.emit(respuesta.pending)
             return
         self.conv.add_assistant(respuesta.text)
-        self.listo.emit(respuesta.text, respuesta.tools_used)
+        self.listo.emit(respuesta.text, respuesta.tools_used, respuesta.ya_dicho)
 
     def confirmar(self, pendiente: PendingConfirmation) -> None:
         resultado = self.agent.confirm(pendiente)
         self.conv.add_assistant(resultado.message)
-        self.listo.emit(resultado.message, [pendiente.tool])
+        self.listo.emit(resultado.message, [pendiente.tool], False)
 
 
 class Nova(QObject):
@@ -160,6 +161,7 @@ class Nova(QObject):
             on_status=lambda etapa, herramienta, dato: (
                 self._worker.estado.emit(etapa, herramienta, dato)
             ),
+            on_frase=lambda frase: self._worker.frase.emit(frase),
         )
 
         # ── Interfaz ─────────────────────────────────────────────────
@@ -224,9 +226,11 @@ class Nova(QObject):
         self._worker.listo.connect(self._al_responder)
         self._worker.pendiente.connect(self._al_pendiente)
         self._worker.estado.connect(self._al_estado)
+        self._worker.frase.connect(self._al_frase)
 
         self._pendiente: PendingConfirmation | None = None
         self._ocupada = False
+        self._respuesta_en_curso = ""
         self._voz_silenciada = False
 
     # ── Arranque / apagado ───────────────────────────────────────────
@@ -350,6 +354,7 @@ class Nova(QObject):
         self.glow.apagar()
         self.ui.set_dicho(texto)
         self.ui.set_respondido("")
+        self._respuesta_en_curso = ""
 
         # ¿Está contestando a una confirmación pendiente?
         if self._pendiente is not None:
@@ -384,10 +389,26 @@ class Nova(QObject):
         if etapa == "tool" and herramienta:
             self.ui.accion(herramienta, dato)
 
-    def _al_responder(self, texto: str, herramientas: list) -> None:
+    def _al_frase(self, frase: str) -> None:
+        """Una frase de la respuesta, recién salida del modelo.
+
+        Se dice YA, sin esperar al punto final: es lo que quita el
+        silencio largo entre que dejas de hablar y NOVA empieza. El
+        agente sólo manda frases cerradas y no manda las que son puro
+        relleno, así que aquí no hay que decidir nada.
+        """
+        self.ui.set_estado("hablando")
+        self._decir(frase, acumular_subtitulo=True)
+
+    def _al_responder(self, texto: str, herramientas: list, ya_dicho: bool) -> None:
         self._ocupada = False
         self.listener.marcar_turno()
         self.ui.turno_terminado()
+        self.ui.set_respondido(texto)
+        if ya_dicho:
+            # Se fue diciendo mientras se generaba. Repetirla entera
+            # ahora sería, literalmente, decirlo todo dos veces.
+            return
         self._decir(texto)
 
     def _al_pendiente(self, pendiente: object) -> None:
@@ -406,6 +427,7 @@ class Nova(QObject):
         *,
         estado: str = "",
         hablar: bool = True,
+        acumular_subtitulo: bool = False,
     ) -> None:
         """Dice algo en alto y deja el orbe en un estado coherente.
 
@@ -414,7 +436,11 @@ class Nova(QObject):
         frases" del prompt y 200 caracteres son 12 s hablando con el
         micrófono mudo (ver `polish.recortar_para_voz`).
         """
-        self.ui.set_respondido(texto)
+        if acumular_subtitulo:
+            self._respuesta_en_curso = f"{self._respuesta_en_curso} {texto}".strip()
+            self.ui.set_respondido(self._respuesta_en_curso)
+        else:
+            self.ui.set_respondido(texto)
         if va_a_sonar(
             hablar=hablar,
             silenciada=self._voz_silenciada,
