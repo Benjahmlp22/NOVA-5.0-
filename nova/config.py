@@ -152,6 +152,11 @@ class Config:
     # continuo, ventilador), no se puede grabar para siempre.
     max_enunciado_s: float = field(default_factory=lambda: float(_env("NOVA_MAX_ENUNCIADO", "12")))
     mic_exclusive: bool = field(default_factory=lambda: _env_bool("NOVA_MIC_EXCLUSIVO", False))
+    # Cuánto se le puede seguir hablando sin repetir el nombre después de
+    # que ella conteste. Ocho segundos es el hueco de un turno normal.
+    # Con los veinte del timeout de sueño, NOVA procesaba como órdenes
+    # todo lo que se dijera en la habitación durante ese rato.
+    seguimiento_s: float = field(default_factory=lambda: float(_env("NOVA_SEGUIMIENTO", "8")))
     # Segundos de silencio tras despertar antes de volver a dormir.
     awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "20")))
     tts_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_TTS", True))

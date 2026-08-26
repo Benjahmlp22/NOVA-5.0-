@@ -275,3 +275,45 @@ def test_sleep_now_solo_avisa_si_estaba_despierta():
     oyente._awake = True
     oyente.sleep_now("silencio")
     assert eventos == [("dormir", "silencio")]
+
+
+# ── La ventana de seguimiento ────────────────────────────────────────
+#
+# La conversación continua no puede significar "micro abierto veinte
+# segundos a todo lo que se diga en la habitación". En un log real NOVA
+# despertó bien y luego procesó "se despertó", "no quiero nada, cállate"
+# y "dormite" como órdenes — eran intentos de pararla.
+
+def test_recien_hablado_se_le_sigue_sin_nombrarla():
+    oyente, _ = _oyente()
+    oyente._awake = True
+    oyente.marcar_turno()
+    assert oyente._en_seguimiento()
+
+
+def test_pasado_el_hueco_hay_que_volver_a_nombrarla():
+    import time
+
+    oyente, _ = _oyente(seguimiento_s=0.05)
+    oyente._awake = True
+    oyente.marcar_turno()
+    time.sleep(0.1)
+    assert not oyente._en_seguimiento()
+
+
+def test_sin_ningun_turno_todavia_no_hay_seguimiento():
+    """Recién arrancada, nadie le ha hablado: nada está en curso."""
+    oyente, _ = _oyente()
+    assert not oyente._en_seguimiento()
+
+
+@pytest.mark.parametrize("frase", [
+    "cállate", "duérmete", "dormite", "silencio", "para ya", "déjame",
+])
+def test_mandarla_callar_funciona(frase):
+    """Salieron de un log real: las probó y NOVA siguió a lo suyo."""
+    oyente, eventos = _oyente(frase)
+    oyente._awake = True
+    oyente._entender(_audio(), exige_nombre=False)
+    assert eventos == [("dormir", "despedida")]
+    assert not oyente.awake

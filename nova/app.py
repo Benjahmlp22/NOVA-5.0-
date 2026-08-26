@@ -196,6 +196,7 @@ class Nova(QObject):
             preroll_s=CONFIG.preroll_s,
             silencio_fin_s=CONFIG.silencio_fin_s,
             max_enunciado_s=CONFIG.max_enunciado_s,
+            seguimiento_s=CONFIG.seguimiento_s,
             on_wake=self._voz_despierta.emit,
             on_command=self._voz_comando.emit,
             on_sleep=self._voz_dormir.emit,

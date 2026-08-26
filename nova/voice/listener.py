@@ -89,6 +89,7 @@ _DESPEDIDAS = re.compile(
     r"despues hablamos|luego hablamos|hasta luego|hasta pronto|hasta manana|"
     r"eso es todo|eso seria todo|nada mas|ya esta|listo gracias|"
     r"adios|chao|chau|nos vemos|vete|dejalo|olvidalo|"
+    r"callate|calla|duermete|dormite|a dormir|silencio|para ya|dejame|"
     r"gracias nova|ya no|nada"
     r")\b"
 )
@@ -111,6 +112,7 @@ class VoiceListener:
         preroll_s: float = 1.0,
         silencio_fin_s: float = 0.7,
         max_enunciado_s: float = 12.0,
+        seguimiento_s: float = 8.0,
         on_wake: Callable[[bool], None] | None = None,
         on_command: Callable[[str], None] | None = None,
         on_sleep: Callable[[str], None] | None = None,
@@ -130,6 +132,7 @@ class VoiceListener:
         self.preroll_s = preroll_s
         self.silencio_fin_s = silencio_fin_s
         self.max_enunciado_s = max_enunciado_s
+        self.seguimiento_s = seguimiento_s
 
         self._on_wake = on_wake or (lambda con_comando: None)
         self._on_command = on_command or (lambda t: None)
@@ -188,6 +191,22 @@ class VoiceListener:
         """
         self._preroll.clear()
         self._muted.clear()
+
+    def _en_seguimiento(self) -> bool:
+        """¿Sigue abierto el turno como para hablarle sin decir su nombre?
+
+        La conversación continua dice que tras responder sigue
+        escuchando, y así queda. Lo que no puede es tener el micro
+        abierto veinte segundos a todo lo que se diga en la habitación:
+        en un log real, NOVA despertó bien y después procesó "se
+        despertó", "no quiero nada, cállate" y "dormite" como si fueran
+        órdenes — eran intentos de pararla.
+
+        Ocho segundos es el hueco de un turno de conversación. Pasado
+        ese rato sigue DESPIERTA (no hace falta volver a esperar el
+        chime), pero para hablarle hay que volver a nombrarla.
+        """
+        return time.monotonic() - self._ultimo_turno <= self.seguimiento_s
 
     def marcar_turno(self) -> None:
         """La app avisa de que acaba de haber interacción de verdad.
@@ -358,10 +377,10 @@ class VoiceListener:
 
                 nivel = rms(bloque)
                 self._on_nivel(nivel)
-                if self._awake:
-                    # Conversación continua: cualquier voz abre enunciado,
-                    # sin repetir el nombre. Lo que decide si eso ERA para
-                    # NOVA es la etapa 2, no el nivel de sonido.
+                if self._awake and self._en_seguimiento():
+                    # Acabas de hablar con ella: puedes seguir sin repetir
+                    # el nombre. Lo que decide si eso ERA para NOVA es la
+                    # etapa 2, no el nivel de sonido.
                     if nivel >= self._umbral:
                         self._capturar(cola, camino, exige_nombre=False)
                 elif self.detector.escucha(a_int16(bloque)):
