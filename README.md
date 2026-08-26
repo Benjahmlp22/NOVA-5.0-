@@ -31,11 +31,13 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Repo con historial revisable | **hecho** — NOVA4 no tenía git, y era su mayor debilidad |
 | Barrido de bugs de NOVA4 | **hecho** — ver "Lo que se arregló" |
 | Logs con niveles y `--debug` | **hecho** |
-| STT en dos etapas (Vosk + faster-whisper) | pendiente |
-| `python -m nova.doctor` | pendiente |
+| faster-whisper en la RTX 3060 | **verificado** — 1.6 % WER, 0.28 s/frase, 365 MiB |
+| STT en dos etapas dentro de la app | pendiente |
+| `python -m nova.doctor` | **hecho** |
+| Banco de pruebas WER + grabador de corpus | **hecho** |
 | Panel abajo a la derecha | pendiente |
 | Búsqueda en internet | pendiente |
-| Presupuesto de RAM/VRAM medido | pendiente |
+| Presupuesto de RAM/VRAM medido | **hecho** |
 
 ## Qué necesitas
 
@@ -104,6 +106,56 @@ NOVA_KEEP_ALIVE=24h       # el modelo se queda en VRAM, no se recarga
 NOVA_CONFIRM=solo_peligroso
 NOVA_TTS=true
 ```
+
+## Reconocimiento de voz: qué se eligió y con qué números
+
+Medido el 26/08/2026 en esta máquina (RTX 3060 12 GB, Ryzen 5 5600G),
+20 órdenes reales, el mismo audio y el mismo remuestreo para todos.
+
+| motor | WER | exactas | latencia/frase | carga | VRAM |
+|---|---|---|---|---|---|
+| Vosk `es-0.42` | 6.1 % | 18/20 | 0.46 s | 31.5 s | — (CPU) |
+| faster-whisper `small` | **1.6 %** | 18/20 | **0.28 s** | **2.66 s** | **365 MiB** |
+| faster-whisper `medium` | 1.6 % | 18/20 | 0.46 s | 4.02 s | 924 MiB |
+| faster-whisper `large-v3-turbo` | 2.1 % | 17/20 | 0.48 s | 4.22 s | 1024 MiB |
+
+**Gana `small`**, y no por poco: iguala o mejora a los grandes en
+precisión siendo 1.6× más rápido y ocupando un tercio de VRAM. Subir a
+`medium` no compra nada aquí, y `large-v3-turbo` sale peor — más grande
+no es más listo cuando las frases son órdenes de cinco palabras.
+
+Dos advertencias sobre esa tabla, que importan más que la tabla:
+
+**Es audio sintético** (`bench/sintetizar.py`, voz SAPI5 de Windows). Sin
+ruido de sala, sin el remuestreo del micro, sin la prosodia de alguien
+con prisa. Sirvió para lo que tenía que servir — probar que faster-whisper
+funciona en la 3060 sin necesitar micrófono — y para nada más. Los
+números que decidirán de verdad salen de `bench/grabar.py`.
+
+**Vosk acierta 18 de 20 con audio limpio.** Su modelo de español no es el
+desastre que parecía desde fuera. Lo que falla en el uso real es el
+*camino del audio*: captura por MME remuestreando 44.1 → 16 kHz, el mute
+que se come el principio de cada orden, y una segmentación que parte una
+frase en dos comandos. Por eso la Fase 2 ataca primero la tubería
+(WASAPI, pre-roll, VAD) y no sólo el modelo.
+
+Aun así, uno de los dos fallos de Vosk con audio perfecto fue
+`cierra chrome` → «sierra crom», que es de las órdenes más comunes que
+existen. Whisper la acierta.
+
+## Presupuesto de recursos
+
+Con la configuración por defecto, medido con `nvidia-smi` y `psutil`:
+
+| pieza | VRAM | notas |
+|---|---|---|
+| Ollama `qwen3.5:4b` | 3.1 GB | residente con `NOVA_KEEP_ALIVE=24h` |
+| faster-whisper `small` | 365 MiB | `int8_float16` |
+| Vosk `es-0.42` | — | ~2.3 GB en RAM, no toca la GPU |
+| escritorio de Windows | ~2.8 GB | navegador, juegos, etc. |
+
+Sobra sitio en una tarjeta de 12 GB. El cuello de botella de NOVA no es
+la memoria: es el camino del audio y el arranque en frío.
 
 ## Decisiones que importan
 
@@ -213,7 +265,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde azul
-tests/              111 tests, sin red ni micrófono
+tests/              143 tests, sin red ni micrófono
 ```
 
 ## Tests
@@ -222,3 +274,15 @@ tests/              111 tests, sin red ni micrófono
 python -m pytest tests -q
 ruff check .
 ```
+
+## Medir el audio
+
+```bash
+python -m nova.doctor              # ¿es el micro o es el reconocedor?
+python bench/grabar.py --device 28 # graba las 20 frases hablando
+python bench/bench_stt.py --sufijo benja   # WER y latencia de los dos motores
+```
+
+`nova.doctor` es lo primero que hay que ejecutar cuando NOVA no entienda:
+separa "micro apagado", "dispositivo equivocado", "nivel muy bajo" y
+"reconocedor malo", que dan exactamente el mismo síntoma.
