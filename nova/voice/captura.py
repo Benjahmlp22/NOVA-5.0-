@@ -1,27 +1,33 @@
 """Cómo se abre el micrófono, y por qué camino.
 
-En Windows el mismo micrófono se puede abrir por cuatro APIs distintas y
-**no suenan igual**.  Medido en esta máquina el 26/08 con un G435:
+**La captura va por callback, nunca por `InputStream.read()` en un bucle
+de Python.**  Esto no es una preferencia de estilo: es lo único que
+separó un corpus inservible de uno perfecto.
 
-    WASAPI compartido   audio inservible: el 21% de la energía del tramo
-                        hablado en la banda de voz (lo normal es ~53%).
-                        Los dos reconocedores devolvieron basura.
-    MME                 usable pero con artefactos metálicos audibles.
-                        WER de Vosk 22.4% donde con audio limpio da 6.1%.
-    WDM-KS              no se puede abrir aquí ("Invalid device").
-    WASAPI exclusivo    se salta el motor de audio de Windows entero.
+Historia, porque el síntoma apuntaba a cualquier otro sitio.  El 26/08 se
+grabaron 20 frases con un bucle de lectura bloqueante y salieron
+inservibles: sólo el 21% de la energía del tramo hablado caía en la banda
+de voz (lo normal es ~53%) y los dos reconocedores devolvían basura —
+Whisper contestaba "¡Suscríbete!", que es lo que alucina con ruido.  Por
+MME el mismo bucle daba audio audible pero metálico, con Vosk al 22.4% de
+WER donde con audio limpio da 6.1%.
 
-Ese motor es el que aplica los efectos del sistema — supresión de ruido,
-"voice clarity", cancelación de eco — y es el sospechoso de lo metálico:
-esos algoritmos, cuando se pasan, dejan "ruido musical", que es
-exactamente lo que se oye como robótico.  En modo exclusivo el audio
-llega crudo del driver.
+Se sospechó del motor de audio de Windows y sus efectos (supresión de
+ruido, "voice clarity"), que al pasarse dejan "ruido musical" y suenan
+exactamente así.  **Era falso.**  Con este módulo, la misma frase por los
+cuatro caminos —MME, DirectSound, WASAPI compartido y WASAPI exclusivo—
+da 61-67% de energía en banda de voz y Vosk la transcribe entera y
+correcta por los cuatro.  Lo que estaba roto era el bucle de lectura.
 
-Segunda cosa que este módulo arregla: la captura va por **callback**, no
-por `InputStream.read()` en un bucle de Python.  Da igual lo rápido que
-sea el bucle, es el diseño frágil (y WDM-KS directamente no admite
-lectura bloqueante).  El hilo de audio sólo copia el bloque a una cola;
-todo lo demás pasa fuera.
+Por qué: el hilo de audio no puede esperar a que Python vuelva a pedirle
+el siguiente bloque.  Con callback, el driver entrega cuando toca y lo
+único que ocurre en ese hilo es copiar a una cola.  WASAPI, que es el más
+sensible al timing, era también el que peor salía; WDM-KS directamente no
+admite lectura bloqueante.
+
+Queda entonces que los cuatro caminos valen.  Se enumeran probando a
+abrirlos de verdad, no leyendo la tabla de capacidades: un dispositivo
+puede anunciar 48 kHz y luego fallar con "Invalid device".
 """
 
 from __future__ import annotations
