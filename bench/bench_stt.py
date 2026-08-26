@@ -23,6 +23,11 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# La consola de Windows llega en cp1252 y este informe usa flechas y
+# vistos. Sin esto, el banco revienta al imprimir en vez de al medir.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ.parent))
 
@@ -34,18 +39,68 @@ AUDIO = RAIZ / "audio"
 
 # ── Métrica ──────────────────────────────────────────────────────────
 
+_UNIDADES = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete",
+             "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince",
+             "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte",
+             "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco",
+             "veintiseis", "veintisiete", "veintiocho", "veintinueve"]
+_DECENAS = {30: "treinta", 40: "cuarenta", 50: "cincuenta", 60: "sesenta",
+            70: "setenta", 80: "ochenta", 90: "noventa"}
+_CENTENAS = {1: "ciento", 2: "doscientos", 3: "trescientos", 4: "cuatrocientos",
+             5: "quinientos", 6: "seiscientos", 7: "setecientos", 8: "ochocientos",
+             9: "novecientos"}
+
+
+def numero_a_palabras(n: int) -> str:
+    """Deletrea un entero 0-9999 en español, sin tildes.
+
+    Hace falta porque Whisper escribe "4070" donde el usuario dijo
+    "cuatro mil setenta", y Vosk escribe las palabras. Sin esto el WER
+    castiga a Whisper por transcribir MEJOR — que es lo contrario de lo
+    que la métrica debe premiar. Medido: subía su WER del 1.6% al 6.1%,
+    o sea que la conclusión del banco dependía de un detalle de formato.
+    """
+    if n < 0 or n > 9999:
+        return str(n)
+    if n < 30:
+        return _UNIDADES[n]
+    if n < 100:
+        decena, resto = (n // 10) * 10, n % 10
+        return _DECENAS[decena] if not resto else f"{_DECENAS[decena]} y {_UNIDADES[resto]}"
+    if n < 1000:
+        centena, resto = n // 100, n % 100
+        if n == 100:
+            return "cien"
+        cabeza = _CENTENAS[centena]
+        return cabeza if not resto else f"{cabeza} {numero_a_palabras(resto)}"
+    millar, resto = n // 1000, n % 1000
+    cabeza = "mil" if millar == 1 else f"{numero_a_palabras(millar)} mil"
+    return cabeza if not resto else f"{cabeza} {numero_a_palabras(resto)}"
+
+
 def _normalizar_texto(texto: str) -> list[str]:
-    """Minúsculas, sin tildes y sin puntuación: el WER mide palabras.
+    """Minúsculas, sin tildes, sin puntuación y con los números deletreados.
 
     "Discord." y "discord" son el mismo acierto; contarlas como error
     infla el WER de los dos motores por igual y tapa la diferencia real.
+
+    Y los números se deletrean SIEMPRE, vengan como cifra o como palabra:
+    lo que se mide es si el reconocedor entendió lo que se dijo, no cómo
+    decidió escribirlo.
     """
+    t = (texto or "").lower().replace("%", " por ciento ")
     sin_tildes = "".join(
-        c for c in unicodedata.normalize("NFD", (texto or "").lower())
+        c for c in unicodedata.normalize("NFD", t)
         if unicodedata.category(c) != "Mn"
     )
     limpio = "".join(c if c.isalnum() or c.isspace() else " " for c in sin_tildes)
-    return limpio.split()
+    palabras: list[str] = []
+    for p in limpio.split():
+        if p.isdigit() and len(p) <= 4:
+            palabras.extend(numero_a_palabras(int(p)).split())
+        else:
+            palabras.append(p)
+    return palabras
 
 
 def wer(referencia: str, hipotesis: str) -> float:

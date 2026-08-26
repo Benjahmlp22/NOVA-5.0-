@@ -21,6 +21,11 @@ import sys
 import time
 from pathlib import Path
 
+# La consola de Windows llega en cp1252 y este informe usa flechas y
+# vistos. Sin esto, el banco revienta al imprimir en vez de al medir.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 RAIZ = Path(__file__).resolve().parent
 FRASES = RAIZ / "frases.txt"
 DESTINO = RAIZ / "audio"

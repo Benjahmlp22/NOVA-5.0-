@@ -59,6 +59,23 @@ def preparar_dlls() -> list[Path]:
             continue
         añadidas.append(carpeta)
 
+    # Y ADEMÁS al PATH. No es cinturón y tirantes: hacen falta las dos.
+    #
+    # `os.add_dll_directory` basta para lo que carga Python (ctypes, los
+    # .pyd), y con él `ctranslate2` importa bien y hasta responde
+    # `get_cuda_device_count() == 1`. Pero CTranslate2 carga cuBLAS y
+    # cuDNN desde su propio C++, con un `LoadLibrary` a secas que no mira
+    # los directorios registrados — y revienta en la PRIMERA
+    # transcripción, no al importar, con "Library cublas64_12.dll is not
+    # found or cannot be loaded".
+    #
+    # Comprobado el 26/08: con add_dll_directory a solas, el modelo carga
+    # en 2.4 s y falla al transcribir; añadiendo el PATH, transcribe.
+    if añadidas:
+        os.environ["PATH"] = os.pathsep.join(
+            [str(c) for c in añadidas] + [os.environ.get("PATH", "")]
+        )
+
     if añadidas:
         log.debug("DLL de CUDA registradas: %s", ", ".join(c.name for c in añadidas))
     else:

@@ -55,3 +55,47 @@ def test_referencia_vacia_no_revienta():
 def test_normalizar_parte_en_palabras():
     assert _normalizar_texto("¡Abre, Discord!") == ["abre", "discord"]
     assert _normalizar_texto("") == []
+
+
+# ── Los números se comparan por lo que se dijo, no por cómo se escribió ──
+
+from bench.bench_stt import numero_a_palabras  # noqa: E402
+
+
+@pytest.mark.parametrize("n,esperado", [
+    (0, "cero"),
+    (7, "siete"),
+    (15, "quince"),
+    (21, "veintiuno"),
+    (30, "treinta"),
+    (31, "treinta y uno"),
+    (100, "cien"),
+    (150, "ciento cincuenta"),
+    (750, "setecientos cincuenta"),
+    (1000, "mil"),
+    (4070, "cuatro mil setenta"),
+    (2026, "dos mil veintiseis"),
+])
+def test_numero_a_palabras(n, esperado):
+    assert numero_a_palabras(n) == esperado
+
+
+def test_cifra_y_palabra_son_el_mismo_acierto():
+    """Whisper escribe "4070"; el usuario dijo "cuatro mil setenta".
+
+    Sin esto, la métrica castiga a Whisper por transcribir mejor y la
+    conclusión del banco depende de un detalle de formato.
+    """
+    ref = "busca en internet el precio de la cuatro mil setenta"
+    assert wer(ref, "Busca en internet el precio de la 4070.") == 0.0
+
+
+def test_porcentaje_escrito_de_las_dos_formas():
+    ref = "pon el volumen al treinta por ciento"
+    assert wer(ref, "Pon el volumen al 30%.") == 0.0
+
+
+def test_un_numero_mal_sigue_siendo_error():
+    """Normalizar formato no puede tapar un número entendido mal."""
+    ref = "pon el volumen al treinta por ciento"
+    assert wer(ref, "Pon el volumen al 40%.") > 0.0
