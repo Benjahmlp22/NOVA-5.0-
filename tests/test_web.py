@@ -152,10 +152,73 @@ def test_un_resumen_corto_no_se_toca():
 
 
 def test_redactar_aguanta_resultados_a_medias():
-    """Un resultado sin cuerpo no puede tumbar la respuesta entera."""
-    texto = redactar("algo", [{"title": "Sólo título"}, {"body": "Sólo cuerpo"}])
-    assert "Sólo título" in texto
-    assert "Sólo cuerpo" in texto
+    """Un resultado a medias no puede tumbar la respuesta entera."""
+    completo = {"title": "Precio", "href": "https://a.es/x",
+                "body": "La fuente de 750 vatios cuesta noventa euros en varias tiendas."}
+    texto = redactar("fuente 750 vatios", [{"title": "Sólo título"}, completo])
+    assert "noventa euros" in texto
+
+
+def test_un_resultado_sin_sustancia_se_descarta():
+    """Un título de tienda sin datos no es un resultado, es ruido."""
+    texto = redactar("precio", [{"title": "Ofertas", "href": "https://a.es", "body": "Ver más"}])
+    assert "no he encontrado nada útil" in texto.lower()
+
+
+def test_no_se_repite_el_mismo_dominio():
+    """Tres resultados de Amazon no son tres resultados."""
+    from nova.tools.web import _palabras_clave, _utiles
+
+    crudos = [
+        {"title": "A", "href": "https://www.amazon.es/1",
+         "body": "La RTX 4070 cuesta 549 euros en esta tienda ahora mismo."},
+        {"title": "B", "href": "https://amazon.es/2",
+         "body": "La RTX 4070 está a 559 euros con envío gratis incluido."},
+        {"title": "C", "href": "https://pccomponentes.com/3",
+         "body": "La RTX 4070 aparece listada a 539 euros esta semana."},
+    ]
+    utiles = _utiles(crudos, _palabras_clave("precio rtx 4070"))
+    dominios = [r["dominio"] for r in utiles]
+    assert len(dominios) == len(set(dominios))
+    assert "pccomponentes.com" in dominios
+
+
+def test_se_elige_la_frase_que_habla_de_lo_preguntado():
+    """En una página de tienda, los primeros 220 caracteres son el menú."""
+    from nova.tools.web import _frases_utiles, _palabras_clave
+
+    cuerpo = (
+        "Inicio | Componentes | Tarjetas gráficas | Placas base. "
+        "La RTX 4070 cuesta 549 euros en la mayoría de tiendas. "
+        "Envíos y devoluciones. Atención al cliente."
+    )
+    elegido = _frases_utiles(cuerpo, _palabras_clave("precio de la rtx 4070"))
+    assert "549 euros" in elegido
+    assert "Atención al cliente" not in elegido
+
+
+def test_el_texto_pide_al_modelo_que_conteste_no_que_lea():
+    """Unos resultados de búsqueda no son una respuesta, son material.
+
+    Sin la instrucción, el modelo lee la lista de títulos en voz alta,
+    que es exactamente lo que nadie quiere oír.
+    """
+    texto = redactar("quien ganó el mundial", [
+        {"title": "Final", "href": "https://a.es",
+         "body": "Argentina se impuso a Francia en los penaltis y fue campeona."},
+    ])
+    assert "una frase corta" in texto.lower()
+    assert "no leas la lista" in texto.lower()
+
+
+def test_nunca_se_devuelven_mas_de_los_pedidos():
+    crudos = [
+        {"title": f"T{i}", "href": f"https://sitio{i}.es",
+         "body": f"Un resultado con sustancia suficiente número {i} para pasar el filtro."}
+        for i in range(10)
+    ]
+    texto = redactar("algo", crudos, tope=3)
+    assert len([ln for ln in texto.splitlines() if ln.startswith("- ")]) == 3
 
 
 # ── Permisos ─────────────────────────────────────────────────────────

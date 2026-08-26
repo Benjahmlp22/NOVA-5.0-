@@ -13,18 +13,30 @@ import numpy as np
 import pytest
 
 from nova.voice.listener import VoiceListener
+from nova.voice.transcriptor import Transcripcion
 
 
 class TranscriptorFalso:
-    """Devuelve el guion que se le dé, en orden."""
+    """Devuelve el guion que se le dé, en orden.
 
-    def __init__(self, *textos: str) -> None:
+    `no_habla` y `logprob` se pueden forzar para probar el filtro de
+    confianza, que es lo que separa "me han dicho algo" de "ha sonado
+    algo" — sin él, NOVA responde al audio de un juego de fondo.
+    """
+
+    def __init__(self, *textos: str, no_habla: float = 0.0, logprob: float = -0.2) -> None:
         self.textos = list(textos)
+        self.no_habla = no_habla
+        self.logprob = logprob
         self.recibido: list[int] = []
 
-    def transcribir(self, senal) -> str:  # noqa: ANN001
+    def transcribir_detallado(self, senal) -> Transcripcion:  # noqa: ANN001
         self.recibido.append(len(senal))
-        return self.textos.pop(0) if self.textos else ""
+        texto = self.textos.pop(0) if self.textos else ""
+        return Transcripcion(texto, self.no_habla, self.logprob)
+
+    def transcribir(self, senal) -> str:  # noqa: ANN001
+        return self.transcribir_detallado(senal).texto
 
     def cargar(self) -> bool:
         return True
@@ -33,12 +45,12 @@ class TranscriptorFalso:
         pass
 
 
-def _oyente(*textos: str, **kw):
+def _oyente(*textos: str, no_habla: float = 0.0, logprob: float = -0.2, **kw):
     eventos: list[tuple[str, object]] = []
     oyente = VoiceListener(
         Path("/no/existe"),
         "nova",
-        transcriptor=TranscriptorFalso(*textos),
+        transcriptor=TranscriptorFalso(*textos, no_habla=no_habla, logprob=logprob),
         on_wake=lambda con_comando: eventos.append(("wake", con_comando)),
         on_command=lambda t: eventos.append(("comando", t)),
         on_sleep=lambda m: eventos.append(("dormir", m)),
@@ -151,18 +163,82 @@ def test_el_preroll_nunca_es_cero():
     assert oyente._preroll.maxlen >= 1
 
 
-def test_mute_no_para_el_preroll():
-    """Mientras NOVA habla se deja de PROCESAR, pero se sigue guardando.
+def test_al_dejar_de_hablar_se_tira_lo_capturado_mientras_hablaba():
+    """NOVA no puede oírse a sí misma. Era el bug de "responde sin parar".
 
-    En NOVA4 el audio se tiraba entero y se comía el principio de lo que
-    dijeras justo después de que ella terminara.
+    El pre-roll seguía llenándose durante el mute, y lo que hay en ese
+    segundo es la voz de NOVA. Al soltar el mute entraba como comando:
+    se oía, contestaba, se volvía a oír, y así indefinidamente.
     """
     oyente, _ = _oyente()
     oyente.mute()
-    assert oyente._muted.is_set()
-    # El búfer es independiente del mute: sigue aceptando bloques.
-    oyente._preroll.append(_audio(0.05))
+    oyente._preroll.append(_audio(0.05))   # esto es NOVA hablando
     assert len(oyente._preroll) == 1
+
+    oyente.unmute()
+    assert len(oyente._preroll) == 0
+    assert not oyente._muted.is_set()
+
+
+# ── Lo que suena no siempre es alguien hablándole a NOVA ─────────────
+
+def test_lo_que_no_es_habla_se_descarta():
+    """Whisper devuelve SIEMPRE alguna frase, también con música o un juego."""
+    oyente, eventos = _oyente("Suscríbete al canal", no_habla=0.95)
+    oyente._awake = True
+    oyente._entender(_audio(), exige_nombre=False)
+    assert eventos == []
+
+
+def test_lo_entendido_sin_confianza_se_descarta():
+    oyente, eventos = _oyente("abre discord", logprob=-2.5)
+    oyente._awake = True
+    oyente._entender(_audio(), exige_nombre=False)
+    assert eventos == []
+
+
+def test_una_llamada_dudosa_tampoco_despierta():
+    oyente, eventos = _oyente("NOVA, abre Discord", no_habla=0.9)
+    oyente._entender(_audio(), exige_nombre=True)
+    assert eventos == []
+    assert not oyente.awake
+
+
+def test_una_palabra_suelta_no_es_una_orden():
+    """Trozos de conversación ajena o de la tele, estando despierta."""
+    oyente, eventos = _oyente("vale")
+    oyente._awake = True
+    oyente._entender(_audio(), exige_nombre=False)
+    # "vale" sí pasa: es una confirmación válida.
+    assert eventos == [("comando", "vale")]
+
+    oyente2, eventos2 = _oyente("mando")
+    oyente2._awake = True
+    oyente2._entender(_audio(), exige_nombre=False)
+    assert eventos2 == []
+
+
+def test_el_reloj_de_seguir_despierta_cuenta_desde_el_ultimo_turno():
+    """Contarlo desde el último RUIDO la dejaba despierta para siempre.
+
+    Con una tele de fondo el umbral se cruza cada dos por tres, y
+    despierta responde a lo que oiga.
+    """
+    import time
+
+    oyente, _ = _oyente("abre discord")
+    oyente._awake = True
+    antes = oyente._ultimo_turno
+    oyente._entender(_audio(), exige_nombre=False)
+    assert oyente._ultimo_turno > antes
+    assert oyente._ultimo_turno <= time.monotonic()
+
+
+def test_marcar_turno_reinicia_el_reloj():
+    oyente, _ = _oyente()
+    antes = oyente._ultimo_turno
+    oyente.marcar_turno()
+    assert oyente._ultimo_turno > antes
 
 
 # ── Quitar el nombre ─────────────────────────────────────────────────

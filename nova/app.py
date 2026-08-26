@@ -338,6 +338,14 @@ class Nova(QObject):
         self._decir(random.choice(SALUDOS), estado="escucha")
 
     def _al_comando(self, texto: str) -> None:
+        # Mientras está pensando o hablando, lo que llegue NO es un
+        # comando nuevo: o es ella misma, o es alguien hablando por
+        # encima. Antes se encolaban y NOVA contestaba una detrás de
+        # otra sin parar, que es el fallo que más molestaba.
+        if self._ocupada:
+            log.info("ignoro %r: todavía estoy con lo anterior", texto)
+            return
+
         self.glow.apagar()
         self.ui.set_dicho(texto)
         self.ui.set_respondido("")
@@ -377,10 +385,14 @@ class Nova(QObject):
 
     def _al_responder(self, texto: str, herramientas: list) -> None:
         self._ocupada = False
+        self.listener.marcar_turno()
+        self.ui.turno_terminado()
         self._decir(texto)
 
     def _al_pendiente(self, pendiente: object) -> None:
         self._ocupada = False
+        self.listener.marcar_turno()
+        self.ui.turno_terminado()
         self._pendiente = pendiente  # type: ignore[assignment]
         resumen = getattr(pendiente, "summary", "")
         self._decir(f"¿Confirmas que quiero {resumen}?" if resumen else "¿Lo confirmo?")

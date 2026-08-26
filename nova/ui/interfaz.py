@@ -107,6 +107,10 @@ class Interfaz(QObject):
         self.panel.añadir_accion(tipo, texto)
         log.debug("actividad: %s", texto)
 
+    def turno_terminado(self) -> None:
+        """Ya no está haciendo nada: las acciones se retiran solas."""
+        self.panel.terminar_acciones()
+
     # ── Posición ─────────────────────────────────────────────────────
 
     @staticmethod

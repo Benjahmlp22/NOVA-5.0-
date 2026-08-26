@@ -77,6 +77,13 @@ log = logging.getLogger("nova.voice.listener")
 
 # Frases con las que el usuario cierra la conversación. No son comandos:
 # no se le mandan al modelo, cierran el turno y NOVA vuelve a dormir.
+# Respuestas de una palabra que SÍ son un turno válido: contestan a una
+# confirmación pendiente.
+_AFIRMACIONES = frozenset({
+    "si", "sí", "claro", "dale", "vale", "ok", "okey", "hazlo", "adelante",
+    "venga", "confirmo", "correcto", "no", "cancela", "para", "espera",
+})
+
 _DESPEDIDAS = re.compile(
     r"\b("
     r"despues hablamos|luego hablamos|hasta luego|hasta pronto|hasta manana|"
@@ -139,6 +146,7 @@ class VoiceListener:
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
         self._umbral = 0.006
+        self._ultimo_turno = 0.0
         self.error = ""
 
         # Búfer circular: el último segundo, siempre. Se dimensiona en
@@ -161,16 +169,34 @@ class VoiceListener:
         return self._ready.is_set()
 
     def mute(self) -> None:
-        """Deja de procesar audio (mientras NOVA habla, para no oírse).
-
-        El búfer circular NO se para: cuando NOVA termine, el último
-        segundo sigue guardado. En NOVA4 el audio se tiraba entero y por
-        eso se comía el principio de lo que dijeras justo después.
-        """
+        """Deja de procesar audio mientras NOVA habla, para no oírse."""
         self._muted.set()
 
     def unmute(self) -> None:
+        """Vuelve a escuchar, TIRANDO lo capturado mientras hablaba.
+
+        Aquí había un bug de manual. El búfer de pre-roll seguía
+        llenándose durante el mute con la idea de no perder el principio
+        de tu respuesta... pero lo que hay en ese segundo es la voz de
+        NOVA, no la tuya. Al soltar el mute, ese pre-roll entraba como
+        comando: NOVA se oía a sí misma, contestaba, se volvía a oír, y
+        de ahí el "responde sin parar".
+
+        Se pierde algo real —si empiezas a hablar antes de que ella
+        termine, ese principio ya no está— pero ese audio llevaba su voz
+        encima de la tuya y no servía igualmente.
+        """
+        self._preroll.clear()
         self._muted.clear()
+
+    def marcar_turno(self) -> None:
+        """La app avisa de que acaba de haber interacción de verdad.
+
+        Es lo que reinicia el reloj de "sigo despierta". Contarlo desde
+        el último ruido dejaba a NOVA despierta indefinidamente en una
+        habitación con la tele puesta.
+        """
+        self._ultimo_turno = time.monotonic()
 
     def sleep_now(self, motivo: str = "fin") -> None:
         if self._awake:
@@ -306,7 +332,6 @@ class VoiceListener:
             except Exception:  # noqa: BLE001
                 log.debug("callback de listo falló", exc_info=True)
 
-            ultimo_habla = time.monotonic()
             while self._running:
                 try:
                     bruto = cola.get(timeout=0.5)
@@ -324,23 +349,25 @@ class VoiceListener:
                 if self._muted.is_set():
                     continue
 
-                if self._awake and time.monotonic() - ultimo_habla > self.awake_timeout_s:
+                # El reloj cuenta desde el último TURNO de verdad, no
+                # desde el último ruido. Contándolo desde el ruido, una
+                # tele o un juego de fondo la mantenían despierta para
+                # siempre, y despierta responde a lo que oiga.
+                if self._awake and time.monotonic() - self._ultimo_turno > self.awake_timeout_s:
                     self.sleep_now("silencio")
 
                 nivel = rms(bloque)
                 self._on_nivel(nivel)
                 if self._awake:
                     # Conversación continua: cualquier voz abre enunciado,
-                    # sin repetir el nombre.
+                    # sin repetir el nombre. Lo que decide si eso ERA para
+                    # NOVA es la etapa 2, no el nivel de sonido.
                     if nivel >= self._umbral:
-                        ultimo_habla = time.monotonic()
                         self._capturar(cola, camino, exige_nombre=False)
-                        ultimo_habla = time.monotonic()
                 elif self.detector.escucha(a_int16(bloque)):
                     log.debug("etapa 1: algo suena a «%s»", self.wake_word)
                     self.detector.reiniciar()
                     self._capturar(cola, camino, exige_nombre=True)
-                    ultimo_habla = time.monotonic()
 
     # ── Captura de un enunciado ──────────────────────────────────────
 
@@ -391,10 +418,17 @@ class VoiceListener:
         if self.transcriptor is None:
             return
         t0 = time.monotonic()
-        texto = normalizar_texto(self.transcriptor.transcribir(senal))
+        oido = self.transcriptor.transcribir_detallado(senal)
+        texto = normalizar_texto(oido.texto)
         log.info("oído en %.2fs (%.1fs de audio): %r",
                  time.monotonic() - t0, senal.size / SAMPLE_RATE, texto)
-        if not texto:
+
+        # Whisper SIEMPRE devuelve alguna frase, también si le das música,
+        # el audio de un juego o una tele de fondo. Sin este filtro, estar
+        # despierta significa responder a cualquier cosa que suene — que
+        # es exactamente lo que hacía.
+        if not oido.creible:
+            log.info("descarto lo oído: %s", oido.motivo_descarte())
             return
 
         if exige_nombre:
@@ -406,6 +440,7 @@ class VoiceListener:
                 log.debug("etapa 2 descarta la llamada: %r", texto)
                 return
             self._awake = True
+            self._ultimo_turno = time.monotonic()
             # El aviso lleva si viene orden pegada: sin eso, NOVA saluda
             # ("Dime.") y procesa la orden a la vez, hablándose encima.
             self._on_wake(bool(resto))
@@ -419,9 +454,17 @@ class VoiceListener:
             self.sleep_now("despedida")
             return
 
+        # Una palabra suelta rara vez es una orden y muy a menudo es un
+        # trozo de conversación ajena o de la tele. Las afirmaciones
+        # cortas sí valen: son la respuesta a "¿confirmas que...?".
+        if len(texto.split()) < 2 and texto not in _AFIRMACIONES:
+            log.info("ignoro %r: demasiado corto para ser una orden", texto)
+            return
+
         comando = self._quitar_nombre(texto)
         comando = texto if comando is None else comando
         if comando:
+            self._ultimo_turno = time.monotonic()
             self._on_command(comando)
 
     def _quitar_nombre(self, texto: str) -> str | None:

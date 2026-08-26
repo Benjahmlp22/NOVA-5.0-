@@ -32,17 +32,34 @@ from __future__ import annotations
 from collections import deque
 
 from PyQt5.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QMenu, QWidget
 
-ANCHO, ALTO = 340, 208
+ANCHO = 340
 RADIO = 14
+
+# El panel CRECE con lo que haya que enseñar en vez de recortar el texto.
+# Recortar era lo cómodo, pero un subtítulo cortado a media frase no sirve
+# para lo único que sirven los subtítulos: comprobar si te entendió bien.
+ALTO_MINIMO = 116
+ALTO_MAXIMO = 420
+LINEAS_MAXIMAS = 4
+
+# Cabecera (40) + onda (52) + aire. Todo lo que viene debajo se apila.
+ALTO_SUPERIOR = 102
+ALTO_LINEA = 16
+ALTO_ACCION = 15
+HUECO_BLOQUE = 8
+RELLENO_INFERIOR = 14
 
 # Cuántas medidas de nivel caben en la onda. 72 a ~30 fps son unos 2.4 s
 # de historia visible: suficiente para ver la forma de una frase.
 MUESTRAS_ONDA = 72
 
 ACCIONES_VISIBLES = 4
+
+# Cuánto se queda una acción ya terminada antes de irse sola.
+SEGUNDOS_ACCION_VISIBLE = 3.0
 
 # Paleta. Fondo casi negro y un color por estado; el resto es gris.
 _FONDO = QColor(11, 11, 13, 238)
@@ -115,11 +132,16 @@ class Panel(QWidget):
         # Obligatorio: sin esto, aparecer a mitad de partida te saca del
         # juego, que es justo lo contrario de para lo que sirve NOVA.
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFixedSize(ANCHO, ALTO)
+        self.setFixedWidth(ANCHO)
+        self.setFixedHeight(ALTO_MINIMO)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
+
+        self._borrado = QTimer(self)
+        self._borrado.setSingleShot(True)
+        self._borrado.timeout.connect(self._limpiar_acciones)
 
     # ── Entradas ─────────────────────────────────────────────────────
 
@@ -134,14 +156,33 @@ class Panel(QWidget):
 
     def set_dicho(self, texto: str) -> None:
         self._dicho = texto or ""
+        self._ajustar_alto()
         self.update()
 
     def set_respondido(self, texto: str) -> None:
         self._respondido = texto or ""
+        self._ajustar_alto()
         self.update()
 
     def añadir_accion(self, tipo: str, detalle: str) -> None:
+        self._borrado.stop()
         self._acciones.append((tipo, detalle))
+        self._ajustar_alto()
+        self.update()
+
+    def terminar_acciones(self) -> None:
+        """El turno acabó: las acciones se van solas en un momento.
+
+        No al instante: se quedan lo justo para poder leer qué acaba de
+        hacer. Pero tampoco para siempre — una lista de cosas ya hechas
+        deja de informar y sólo ocupa sitio.
+        """
+        if self._acciones:
+            self._borrado.start(int(SEGUNDOS_ACCION_VISIBLE * 1000))
+
+    def _limpiar_acciones(self) -> None:
+        self._acciones.clear()
+        self._ajustar_alto()
         self.update()
 
     # ── Colocación ───────────────────────────────────────────────────
@@ -149,7 +190,7 @@ class Panel(QWidget):
     def colocar(self, esquina: str = "bottom-right", margen: int = 16) -> None:
         pantalla = self.screen().availableGeometry()
         x = pantalla.right() - ANCHO - margen
-        y = pantalla.bottom() - ALTO - margen
+        y = pantalla.bottom() - self.height() - margen
         if "left" in esquina:
             x = pantalla.left() + margen
         if "top" in esquina:
@@ -176,12 +217,11 @@ class Panel(QWidget):
         self._pintar_fondo(p)
         self._pintar_cabecera(p, color)
         self._pintar_onda(p, color)
-        self._pintar_subtitulos(p)
-        self._pintar_acciones(p)
+        self._pintar_acciones(p, self._pintar_texto(p))
 
     def _pintar_fondo(self, p: QPainter) -> None:
         camino = QPainterPath()
-        camino.addRoundedRect(0.5, 0.5, ANCHO - 1, ALTO - 1, RADIO, RADIO)
+        camino.addRoundedRect(0.5, 0.5, ANCHO - 1, self.height() - 1, RADIO, RADIO)
         p.fillPath(camino, _FONDO)
         p.setPen(QPen(_BORDE, 1))
         p.drawPath(camino)
@@ -231,48 +271,112 @@ class Panel(QWidget):
                 1, 1,
             )
 
-    def _pintar_subtitulos(self, p: QPainter) -> None:
-        fuente = QFont()
-        fuente.setPointSize(8)
-        p.setFont(fuente)
+    # ── Subtítulos: bajan, no se cortan ──────────────────────────────
 
-        y = 100
+    def _lineas(self, metricas, texto: str, ancho: int) -> list[str]:
+        """Parte el texto en líneas que quepan, cortando por palabras.
+
+        Antes se recortaba con puntos suspensivos, y un subtítulo cortado
+        a media frase no sirve para lo único que sirven los subtítulos:
+        comprobar si NOVA te entendió bien.
+        """
+        lineas: list[str] = []
+        actual = ""
+        for palabra in texto.split():
+            prueba = f"{actual} {palabra}".strip()
+            if actual and metricas.horizontalAdvance(prueba) > ancho:
+                lineas.append(actual)
+                actual = palabra
+                if len(lineas) == LINEAS_MAXIMAS:
+                    break
+            else:
+                actual = prueba
+        if actual and len(lineas) < LINEAS_MAXIMAS:
+            lineas.append(actual)
+        # Sólo se recorta si ni con todas las líneas cabe: en ese caso el
+        # final es lo prescindible, no el principio.
+        if len(lineas) == LINEAS_MAXIMAS and actual and lineas[-1] != actual:
+            lineas[-1] = metricas.elidedText(lineas[-1] + "…", Qt.ElideRight, ancho)
+        return lineas
+
+    def _bloques_de_texto(self, metricas) -> list[tuple[str, list[str], QColor]]:
+        ancho = ANCHO - 66
+        bloques = []
         for etiqueta, texto, color in (
             ("tú", self._dicho, _TENUE),
             ("NOVA", self._respondido, _TEXTO),
         ):
-            if not texto:
-                y += 26
-                continue
-            p.setPen(_TENUE)
-            p.drawText(QRect(14, y, 36, 18), Qt.AlignLeft | Qt.AlignVCenter, etiqueta)
-            p.setPen(color)
-            metricas = p.fontMetrics()
-            recorte = metricas.elidedText(texto, Qt.ElideRight, ANCHO - 68)
-            p.drawText(QRect(52, y, ANCHO - 66, 18), Qt.AlignLeft | Qt.AlignVCenter, recorte)
-            y += 26
+            if texto:
+                bloques.append((etiqueta, self._lineas(metricas, texto, ancho), color))
+        return bloques
 
-    def _pintar_acciones(self, p: QPainter) -> None:
+    def _alto_necesario(self) -> int:
+        metricas = QFontMetrics(self._fuente_texto())
+        alto = ALTO_SUPERIOR
+        for _etiqueta, lineas, _color in self._bloques_de_texto(metricas):
+            alto += len(lineas) * ALTO_LINEA + HUECO_BLOQUE
+        if self._acciones:
+            alto += HUECO_BLOQUE + len(self._acciones) * ALTO_ACCION
+        return max(ALTO_MINIMO, min(ALTO_MAXIMO, alto + RELLENO_INFERIOR))
+
+    @staticmethod
+    def _fuente_texto() -> QFont:
         fuente = QFont()
         fuente.setPointSize(8)
+        return fuente
+
+    def _ajustar_alto(self) -> None:
+        """Crece o encoge, manteniendo quieto el borde de abajo.
+
+        Si creciera hacia abajo, el panel se saldría de la pantalla en
+        cuanto el subtítulo ocupara dos líneas; y si el borde inferior se
+        moviera, el bloque "saltaría" cada vez que NOVA responde.
+        """
+        alto = self._alto_necesario()
+        if alto == self.height():
+            return
+        abajo = self.geometry().bottom()
+        self.setFixedHeight(alto)
+        self.move(self.x(), abajo - alto)
+
+    def _pintar_texto(self, p: QPainter) -> int:
+        fuente = self._fuente_texto()
         p.setFont(fuente)
         metricas = p.fontMetrics()
 
-        y = ALTO - 16 - 15 * len(self._acciones)
+        y = ALTO_SUPERIOR
+        for etiqueta, lineas, color in self._bloques_de_texto(metricas):
+            p.setPen(_TENUE)
+            p.drawText(QRect(14, y, 36, ALTO_LINEA),
+                       Qt.AlignLeft | Qt.AlignVCenter, etiqueta)
+            p.setPen(color)
+            for linea in lineas:
+                p.drawText(QRect(52, y, ANCHO - 66, ALTO_LINEA),
+                           Qt.AlignLeft | Qt.AlignVCenter, linea)
+                y += ALTO_LINEA
+            y += HUECO_BLOQUE
+        return y
+
+    def _pintar_acciones(self, p: QPainter, y: int) -> None:
+        if not self._acciones:
+            return
+        metricas = p.fontMetrics()
+        y += HUECO_BLOQUE
         for i, (tipo, detalle) in enumerate(self._acciones):
             reciente = i == len(self._acciones) - 1
             c = QColor(color_de_accion(tipo))
             if not reciente:
                 c.setAlpha(120)
             p.setPen(c)
-            p.drawText(QRect(14, y, 12, 14), Qt.AlignLeft | Qt.AlignVCenter, "▸")
-            p.setPen(c if reciente else QColor(_TENUE.red(), _TENUE.green(), _TENUE.blue(), 150))
+            p.drawText(QRect(14, y, 12, ALTO_ACCION), Qt.AlignLeft | Qt.AlignVCenter, "▸")
+            p.setPen(c if reciente else QColor(_TENUE.red(), _TENUE.green(),
+                                               _TENUE.blue(), 150))
             p.drawText(
-                QRect(28, y, ANCHO - 42, 14),
+                QRect(28, y, ANCHO - 42, ALTO_ACCION),
                 Qt.AlignLeft | Qt.AlignVCenter,
                 metricas.elidedText(detalle, Qt.ElideRight, ANCHO - 46),
             )
-            y += 15
+            y += ALTO_ACCION
 
     # ── Interacción ──────────────────────────────────────────────────
 

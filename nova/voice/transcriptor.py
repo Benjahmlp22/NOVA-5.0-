@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -41,6 +42,42 @@ PROMPT_NOVA = (
     "Visual Studio Code, bloc de notas, captura de pantalla, memoria RAM, "
     "volumen, RTX 4070, vatios, fuente de alimentación, carpeta, archivo."
 )
+
+
+# Por encima de esto, Whisper cree que el audio NO es habla. Whisper
+# siempre devuelve alguna frase —aunque le des música o ruido de juego—,
+# así que sin este número toda la escucha continua se convierte en
+# "responde a cualquier cosa que suene", que es lo que pasaba.
+MAX_NO_HABLA = 0.60
+
+# Y por debajo de esto, entendió algo pero sin ninguna confianza. Los
+# valores típicos de una frase bien entendida rondan -0.3; el ruido y las
+# alucinaciones caen mucho más abajo.
+MIN_LOGPROB = -1.0
+
+
+@dataclass
+class Transcripcion:
+    """Lo que se oyó, y cuánto se lo cree el modelo."""
+
+    texto: str = ""
+    no_habla: float = 0.0
+    logprob: float = 0.0
+
+    @property
+    def creible(self) -> bool:
+        if not self.texto.strip():
+            return False
+        return self.no_habla <= MAX_NO_HABLA and self.logprob >= MIN_LOGPROB
+
+    def motivo_descarte(self) -> str:
+        if not self.texto.strip():
+            return "sin texto"
+        if self.no_habla > MAX_NO_HABLA:
+            return f"no parece habla (no_habla={self.no_habla:.2f})"
+        if self.logprob < MIN_LOGPROB:
+            return f"entendido sin confianza (logprob={self.logprob:.2f})"
+        return ""
 
 
 class Transcriptor:
@@ -155,8 +192,17 @@ class Transcriptor:
     # ── Uso ──────────────────────────────────────────────────────────
 
     def transcribir(self, senal: np.ndarray) -> str:
+        return self.transcribir_detallado(senal).texto
+
+    def transcribir_detallado(self, senal: np.ndarray) -> Transcripcion:
+        """Como `transcribir`, pero diciendo también cuánto se lo cree.
+
+        La confianza es lo que separa "me han dicho algo" de "ha sonado
+        algo". Sin ella, la música de un juego o una tele de fondo entran
+        como órdenes: Whisper siempre devuelve *alguna* frase.
+        """
         if senal.size == 0:
-            return ""
+            return Transcripcion("")
         # Normalizar aquí y no en el que llama: los dos motores rinden
         # peor con señal floja, y así nadie se olvida de hacerlo.
         senal = normalizar(senal)
@@ -164,10 +210,12 @@ class Transcriptor:
         if self._whisper is not None:
             return self._con_whisper(senal)
         if self._vosk is not None:
-            return self._con_vosk(senal)
-        return ""
+            # Vosk no da probabilidad de "esto no es habla". Se marca como
+            # creíble para no bloquear el camino de reserva.
+            return Transcripcion(self._con_vosk(senal))
+        return Transcripcion("")
 
-    def _con_whisper(self, senal: np.ndarray) -> str:
+    def _con_whisper(self, senal: np.ndarray) -> Transcripcion:
         t0 = time.monotonic()
         segmentos, _info = self._whisper.transcribe(
             senal,
@@ -179,10 +227,15 @@ class Transcriptor:
             # de un asistente no son un texto continuo.
             condition_on_previous_text=False,
         )
-        texto = " ".join(s.text for s in segmentos).strip()
-        log.debug("whisper %.2fs (%.1fs de audio): %r",
-                  time.monotonic() - t0, senal.size / 16000, texto)
-        return texto
+        trozos = list(segmentos)
+        texto = " ".join(s.text for s in trozos).strip()
+        # El peor segmento manda: basta con que una parte sea ruido para
+        # que la frase entera deje de ser fiable.
+        no_habla = max((getattr(s, "no_speech_prob", 0.0) for s in trozos), default=1.0)
+        logprob = min((getattr(s, "avg_logprob", 0.0) for s in trozos), default=-10.0)
+        log.debug("whisper %.2fs (%.1fs de audio): %r [no_habla=%.2f logprob=%.2f]",
+                  time.monotonic() - t0, senal.size / 16000, texto, no_habla, logprob)
+        return Transcripcion(texto, no_habla, logprob)
 
     def _con_vosk(self, senal: np.ndarray) -> str:
         from vosk import KaldiRecognizer
