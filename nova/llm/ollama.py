@@ -69,6 +69,74 @@ class OllamaClient:
         except Exception:
             return False
 
+    def residencia(self) -> float:
+        """Qué fracción del modelo está de verdad en la GPU, de 0 a 1.
+
+        Ollama dice en `/api/ps` cuánto ocupa el modelo (`size`) y cuánto
+        de eso está en VRAM (`size_vram`). Cuando un juego se queda con
+        la tarjeta, el driver expulsa al modelo y esa fracción se hunde:
+        medido con Star Citizen abierto, 330 MB de 3.2 GB — el 10%. El
+        resto corre en CPU y las respuestas pasan de 1-4 s a 10-48 s.
+
+        Es la única señal fiable de "voy lenta por falta de VRAM".
+        Mirar la VRAM libre con nvidia-smi no vale: dice cuánta hay, no
+        si el modelo está dentro.
+
+        Devuelve 1.0 si no se puede saber: ante la duda, no alarmar.
+        """
+        try:
+            datos = self._http.get(f"{self.url}/api/ps", timeout=3.0).json()
+        except Exception:  # noqa: BLE001
+            return 1.0
+        for m in datos.get("models") or []:
+            if m.get("model") != self.model and m.get("name") != self.model:
+                continue
+            total = float(m.get("size") or 0)
+            en_vram = float(m.get("size_vram") or 0)
+            if total <= 0:
+                return 1.0
+            return max(0.0, min(1.0, en_vram / total))
+        # No está cargado todavía: no es que vaya lento, es que no ha
+        # empezado.
+        return 1.0
+
+    def tiene_modelo(self, nombre: str) -> bool:
+        """¿Está ese modelo descargado?
+
+        Se pregunta ANTES de cambiarse a él: cambiar a uno que no existe
+        deja a NOVA muda, y el fallo aparecería a mitad de una respuesta
+        en vez de en el arranque.
+        """
+        try:
+            datos = self._http.get(f"{self.url}/api/tags", timeout=5.0).json()
+        except Exception:  # noqa: BLE001
+            return False
+        return any(
+            (m.get("model") or m.get("name") or "") == nombre
+            for m in datos.get("models") or []
+        )
+
+    def usar_modelo(self, nombre: str) -> None:
+        """Cambia de modelo y suelta el anterior de la memoria.
+
+        Soltarlo importa: con `keep_alive` largo los dos se quedarían
+        residentes, y el motivo de cambiar es justo que no cabe uno.
+        """
+        if nombre == self.model:
+            return
+        anterior = self.model
+        self.model = nombre
+        log.info("cambio de modelo: %s → %s", anterior, nombre)
+        try:
+            # keep_alive 0 = descárgalo ya.
+            self._http.post(
+                f"{self.url}/api/generate",
+                json={"model": anterior, "keep_alive": 0},
+                timeout=10.0,
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("no pude descargar %s", anterior, exc_info=True)
+
     def chat(
         self,
         messages: list[dict[str, Any]],

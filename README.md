@@ -299,8 +299,31 @@ Con la configuración por defecto, medido con `nvidia-smi` y `psutil`:
 | Vosk `es-0.42` | — | ~2.3 GB en RAM, no toca la GPU |
 | escritorio de Windows | ~2.8 GB | navegador, juegos, etc. |
 
-Sobra sitio en una tarjeta de 12 GB. El cuello de botella de NOVA no es
-la memoria: es el camino del audio y el arranque en frío.
+Sobra sitio en una tarjeta de 12 GB **mientras no juegues**. En cuanto un
+juego pide la tarjeta entera, el driver expulsa al modelo y Ollama sigue
+respondiendo desde la CPU sin decir nada. Medido el 27/08 con Star
+Citizen abierto (11.0 de 12.3 GB ocupados), preguntando la hora:
+
+| modelo | respuesta | del modelo, en la GPU |
+|---|---|---|
+| `qwen3.5:4b` | 4.36 - 7.44 s | 10 % |
+| `qwen2.5:3b` | **1.11 - 1.19 s** | 48 % |
+
+El pequeño no razona mejor: es que **cabe** en lo que sobra, y por eso va
+de 4 a 6 veces más rápido. Así que NOVA se cambia sola.
+
+Cada 5 segundos mira `/api/ps` (`size_vram / size`, la única señal fiable
+— la VRAM libre de `nvidia-smi` dice cuánta hay, no si el modelo está
+dentro). Por debajo del 85 % se pasa a `NOVA_MODEL_LIGERO` y descarga el
+grande; cuando cierras el juego, vuelve. Nunca a mitad de una respuesta,
+y el panel pone «· modo ligero» mientras dura, para que no te preguntes
+por qué hoy va distinta.
+
+Si `NOVA_MODEL_LIGERO` no está descargado, NOVA lo dice en el log y se
+queda con el grande: mejor lenta que muda.
+
+El cuello de botella de NOVA sin juegos no es la memoria: es el camino
+del audio y el arranque en frío.
 
 ## Decisiones que importan
 

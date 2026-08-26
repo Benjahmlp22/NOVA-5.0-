@@ -108,6 +108,24 @@ class Config:
     # sobrado, ese coste se paga UNA vez al día, no varias veces por hora.
     # 24h de VRAM ociosa (~2 GB de una tarjeta de 12 GB) sale gratis.
     keep_alive: str = field(default_factory=lambda: _env("NOVA_KEEP_ALIVE", "24h"))
+    # Modelo de repuesto para cuando un juego se queda con la VRAM.
+    #
+    # No es una corazonada: medido el 27/08 con Star Citizen abierto
+    # (11.0 GB de 12.3 ocupados), preguntando "qué hora es" con el
+    # catálogo de herramientas entero:
+    #
+    #   qwen3.5:4b   4.36-7.44 s   sólo el 10% del modelo en la GPU
+    #   qwen2.5:3b   1.11-1.19 s   el 48% en la GPU
+    #
+    # El pequeño CABE en lo que sobra, y por eso va de 4 a 6 veces más
+    # rápido. No es que razone mejor — es que el otro está corriendo en
+    # CPU sin que nadie lo diga.
+    model_ligero: str = field(default_factory=lambda: _env("NOVA_MODEL_LIGERO", "qwen2.5:3b"))
+    # Por debajo de esta fracción del modelo residente en VRAM, se cambia
+    # al ligero. 0.85 y no 1.0 porque Ollama deja siempre algo fuera.
+    residencia_minima: float = field(
+        default_factory=lambda: float(_env("NOVA_RESIDENCIA_MINIMA", "0.85"))
+    )
     temperature: float = field(default_factory=lambda: float(_env("NOVA_TEMPERATURE", "0.6")))
     # Tope de tokens generados: acota la latencia peor caso sin cortar
     # frases a medias (con 200 se truncaban enumeraciones a mitad).
