@@ -1,15 +1,28 @@
-# NOVA 4 — todo local, nada de pago.
+# NOVA 5 — todo local, nada de pago.
 #   pip install -r requirements.txt
 
-PyQt5>=5.15        # overlays (orbe, glow, subtítulos)
-vosk>=0.3.45       # reconocimiento de voz offline
+PyQt5>=5.15        # overlays (orbe, panel, glow)
+vosk>=0.3.45       # wake word offline
 sounddevice>=0.4   # micrófono y chime
-numpy>=1.24        # síntesis del chime
+numpy>=1.24        # síntesis del chime y proceso de audio
 pyttsx3>=2.90      # voz (SAPI5 de Windows, gratis)
 httpx>=0.27        # cliente de Ollama
 psutil>=5.9        # estado del sistema y procesos
 mss>=9.0           # capturas de pantalla
 python-dotenv>=1.0 # configuración
+
+# ── Reconocimiento de voz en GPU ─────────────────────────────────────
+# Vosk se queda para el wake word; la transcripción del comando la hace
+# faster-whisper. Trae PyAV, que además es lo que usa el banco de
+# pruebas para remuestrear a 16 kHz sin escribir un resampler a mano.
+faster-whisper>=1.2
+
+# CTranslate2 (el motor de faster-whisper) necesita estas DLL para ir en
+# GPU, y con pip acaban en site-packages/nvidia/*/bin, fuera del PATH.
+# `nova/voice/cuda.py` las registra antes de importar nada de CUDA.
+# En un PC sin NVIDIA se pueden omitir: NOVA cae a CPU o a Vosk sola.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9,<10
 
 # Desarrollo
 pytest>=8.0
