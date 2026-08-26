@@ -37,7 +37,7 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Banco de pruebas WER + grabador de corpus | **hecho** |
 | Pre-roll, VAD y unmute sin perder el principio | **hecho** |
 | Panel abajo a la derecha | pendiente |
-| Búsqueda en internet | pendiente |
+| Búsqueda en internet | **hecho** |
 | Presupuesto de RAM/VRAM medido | **hecho** |
 | Latencia punta a punta < 1,5 s | **NO** — ver su sección |
 
@@ -100,7 +100,8 @@ la batería y el tiempo que hace, sin que se lo preguntes.
 Abrir y cerrar aplicaciones · buscar si algo está instalado · estado del
 PC y especificaciones · qué tienes en primer plano · IP y conexión ·
 capturas de pantalla · crear, leer y borrar archivos en su carpeta de
-trabajo · recordar cosas de ti entre sesiones · volumen del sistema.
+trabajo · recordar cosas de ti entre sesiones · volumen del sistema ·
+**buscar en internet** y abrirte un enlace.
 
 ## Configuración
 

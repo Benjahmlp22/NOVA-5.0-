@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..config import CONFIG
-from . import apps, files, memory, system
+from . import apps, files, memory, system, web
 from .registry import (
     PendingConfirmation,
     Risk,
@@ -20,6 +20,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     apps.register(reg)
     files.register(reg)
     memory.register(reg)
+    web.register(reg)
     return reg
 
 

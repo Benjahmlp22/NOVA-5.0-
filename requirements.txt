@@ -24,6 +24,9 @@ faster-whisper>=1.2
 nvidia-cublas-cu12
 nvidia-cudnn-cu12>=9,<10
 
+# Búsqueda en internet. Sin API key y sin cuenta, como todo aquí.
+ddgs>=9.0
+
 # Desarrollo
 pytest>=8.0
 ruff>=0.6
