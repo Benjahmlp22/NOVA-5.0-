@@ -100,6 +100,32 @@ def caminos_para(texto_micro: str = "") -> list[Camino]:
     return salida
 
 
+def camino_por_defecto() -> Camino | None:
+    """El micrófono predeterminado de Windows, si se puede abrir.
+
+    Atajo para el arranque: `caminos_para()` prueba a abrir TODOS los
+    dispositivos de entrada, y cada intento fallido de WDM-KS cuesta
+    segundos — 10 s medidos en esta máquina, que son 10 s de NOVA sorda.
+    Aquí se prueba sólo el que el usuario ya eligió en Windows, y la
+    enumeración completa queda como reserva.
+    """
+    import sounddevice as sd
+
+    try:
+        indice = sd.default.device[0]
+        info = sd.query_devices(indice, "input")
+    except Exception:  # noqa: BLE001
+        log.debug("no hay dispositivo de entrada predeterminado", exc_info=True)
+        return None
+
+    camino = Camino(
+        f"{_api(info['hostapi'])} · {info['name'][:28]}",
+        indice,
+        int(info["default_samplerate"]),
+    )
+    return camino if _se_puede_abrir(camino) else None
+
+
 def _se_puede_abrir(camino: Camino) -> bool:
     import sounddevice as sd
 

@@ -4,7 +4,8 @@ Une voz, cerebro y overlays. Un solo proceso, varios hilos:
 
     Hilo Qt (principal)   pinta orbe y glow. Nunca bloquea.
     Hilo de trabajo       LLM + herramientas (tardan segundos).
-    Hilo de escucha       Vosk, dentro de VoiceListener.
+    Hilo de escucha       las dos etapas de voz, dentro de VoiceListener.
+    Hilo de audio         lo abre PortAudio; sólo copia bloques a una cola.
     Hilo de voz (TTS)     pyttsx3, dentro de Speaker.
 
 Los tres hilos que no son el de Qt avisan por señales, nunca llamando
@@ -13,24 +14,30 @@ un hilo suelto es la forma clásica de que una app Qt se cuelgue o se
 caiga sin explicación (y sin traceback que lo delate).
 
 Flujo (conversación continua, no de un solo turno):
-    dormida → "NOVA" → chime + glow + escucha → comando → pensando
-    → herramientas → responde (voz) → sigue escuchando sin repetir "NOVA"
-    → ... → despedida o silencio prolongado → vuelve a dormida
+    dormida → algo suena a "NOVA" (etapa 1, barata)
+            → se captura la frase entera, con el segundo anterior incluido
+            → etapa 2 (Whisper) confirma el nombre Y transcribe la orden
+            → si el nombre no estaba, vuelve a dormir SIN hacer ruido
+            → si estaba: chime + glow + pensando → herramientas → responde
+            → sigue escuchando sin repetir "NOVA"
+            → ... → despedida o silencio prolongado → vuelve a dormida
+
+El chime suena en la etapa 2 y no en la 1 a propósito: "nova" y "no va"
+son la misma secuencia de fonemas en español, así que una puerta abierta
+no es todavía una llamada.
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
 import threading
 import time
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
+from .bootstrap import configurar_logging, parsear_argumentos
 from .config import CONFIG
 from .core.agent import Agent
 from .core.awareness import Awareness
@@ -39,7 +46,7 @@ from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
 from .tools import PendingConfirmation, build_registry, memory
 from .ui import GlowBorder, Orb
-from .voice import Speaker, VoiceListener, play_chime
+from .voice import Speaker, Transcriptor, VoiceListener, play_chime
 
 log = logging.getLogger("nova.app")
 
@@ -117,15 +124,16 @@ class Nova(QObject):
     # que este módulo dice que hay que evitar — así que estos callbacks
     # no llaman a los métodos directamente, emiten una señal. Qt la
     # encola sola hacia el hilo principal porque Nova vive ahí.
-    _voz_despierta = pyqtSignal()
+    _voz_despierta = pyqtSignal(bool)
     _voz_comando = pyqtSignal(str)
     _voz_dormir = pyqtSignal(str)
     _voz_lista = pyqtSignal()
     _voz_error = pyqtSignal(str)
+    _voz_escuchando = pyqtSignal()
     _habla_inicio = pyqtSignal()
     _habla_fin = pyqtSignal()
 
-    def __init__(self, app: QApplication) -> None:
+    def __init__(self, app: QApplication, transcriptor: Transcriptor | None = None) -> None:
         super().__init__()
         self.app = app
         CONFIG.ensure_dirs()
@@ -163,22 +171,38 @@ class Nova(QObject):
             on_start=self._habla_inicio.emit,
             on_end=self._habla_fin.emit,
         )
+        # Etapa 2: entiende la orden Y confirma que el nombre estaba de
+        # verdad. Llega ya cargado desde `run()`, antes de que existiera
+        # Qt — construirlo después mata el proceso (ver voice/cuda.py).
+        self.transcriptor = transcriptor or Transcriptor(
+            modelo=CONFIG.whisper_model,
+            compute_type=CONFIG.whisper_compute,
+            device=CONFIG.whisper_device,
+            vosk_model=CONFIG.vosk_model,
+        )
         self.listener = VoiceListener(
-            CONFIG.vosk_model,
+            CONFIG.wake_model,
             CONFIG.wake_word,
+            transcriptor=self.transcriptor,
             device=CONFIG.mic_device,
+            exclusivo=CONFIG.mic_exclusive,
             awake_timeout_s=CONFIG.awake_timeout_s,
+            preroll_s=CONFIG.preroll_s,
+            silencio_fin_s=CONFIG.silencio_fin_s,
+            max_enunciado_s=CONFIG.max_enunciado_s,
             on_wake=self._voz_despierta.emit,
             on_command=self._voz_comando.emit,
             on_sleep=self._voz_dormir.emit,
             on_ready=self._voz_lista.emit,
             on_error=self._voz_error.emit,
+            on_escuchando=self._voz_escuchando.emit,
         )
         self._voz_despierta.connect(self._al_despertar)
         self._voz_comando.connect(self._al_comando)
         self._voz_dormir.connect(self._al_dormir)
         self._voz_lista.connect(self._al_voz_lista)
         self._voz_error.connect(self._al_voz_error)
+        self._voz_escuchando.connect(self._al_voz_escuchando)
         self._habla_inicio.connect(self._hablando_inicio)
         self._habla_fin.connect(self._hablando_fin)
 
@@ -225,7 +249,18 @@ class Nova(QObject):
 
     def _al_voz_lista(self) -> None:
         self.orb.set_estado("dormida")
-        log.info("NOVA lista. Di «%s».", CONFIG.wake_word)
+        log.info("NOVA lista (%s). Di «%s».", self.transcriptor.motor, CONFIG.wake_word)
+
+    def _al_voz_escuchando(self) -> None:
+        """La etapa 1 ha abierto la puerta: se está capturando la frase.
+
+        Todavía NO se sabe si dijeron el nombre — eso lo confirma la
+        etapa 2 —, así que aquí no suena el chime ni se enciende el glow.
+        El orbe sí cambia: es información honesta y no molesta si luego
+        resulta que era "no va".
+        """
+        if not self._ocupada:
+            self.orb.set_estado("escucha")
 
     def _al_voz_error(self, mensaje: str) -> None:
         self.orb.set_estado("apagada")
@@ -270,7 +305,13 @@ class Nova(QObject):
 
     # ── Eventos de voz (llegan desde el hilo de escucha) ─────────────
 
-    def _al_despertar(self) -> None:
+    def _al_despertar(self, con_comando: bool) -> None:
+        """La etapa 2 ha confirmado que el nombre estaba de verdad.
+
+        Aquí y no antes es donde suena el chime: si sonara al abrir la
+        puerta la etapa 1, NOVA haría ruido cada vez que dijeras "no va a
+        funcionar" — la misma secuencia de fonemas que su nombre.
+        """
         if self._ocupada:
             # Ya estaba trabajando: el usuario la interrumpe.
             self.speaker.shut_up()
@@ -279,6 +320,11 @@ class Nova(QObject):
         self.orb.set_estado("escucha")
         if CONFIG.glow_enabled:
             self.glow.encender()
+
+        if con_comando:
+            # "NOVA abre discord" del tirón. Saludar aquí sería hablar
+            # encima de la respuesta que ya viene en camino.
+            return
         import random
 
         self._decir(random.choice(SALUDOS), estado="escucha")
@@ -378,72 +424,34 @@ class Nova(QObject):
         self._reposo()
 
 
-def _parsear_argumentos(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="nova",
-        description="NOVA — asistente de escritorio local por voz.",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Escribe el detalle completo (audio, parciales, tiempos) al fichero de log.",
-    )
-    return parser.parse_args(argv)
+def run(args=None, transcriptor: Transcriptor | None = None) -> int:  # noqa: ANN001
+    """Punto de entrada: monta la app Qt y entra en el bucle de eventos.
 
-
-def configurar_logging(debug: bool = False, destino: Path | None = None) -> None:
-    """Consola limpia, fichero detallado.
-
-    Cuando el audio falla es en directo y no se puede reproducir: o quedó
-    escrito, o no hay diagnóstico posible. Por eso el fichero se lleva
-    TODO (incluidos los parciales de Vosk, que son DEBUG) mientras la
-    consola se queda en INFO — si no, la consola es ilegible justo cuando
-    más falta hace mirarla.
-
-    El fichero rota: en NOVA4 era un `FileHandler` a secas y crecía sin
-    techo. Con `--debug` cada frase deja varias líneas, así que sin
-    rotación esto se come el disco en sesiones largas.
+    El transcriptor llega YA CARGADO desde `run.py`, que lo prepara antes
+    de importar este módulo. No es una optimización: construirlo después
+    de que PyQt5 esté en el proceso mata a NOVA con un segmentation
+    fault. El porqué medido está en `nova/bootstrap.py`.
     """
-    raiz = logging.getLogger()
-    raiz.setLevel(logging.DEBUG if debug else logging.INFO)
-    for viejo in list(raiz.handlers):
-        raiz.removeHandler(viejo)
-
-    formato = logging.Formatter(
-        "%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S"
-    )
-
-    consola = logging.StreamHandler(sys.stdout)
-    consola.setLevel(logging.INFO)
-    consola.setFormatter(formato)
-    raiz.addHandler(consola)
-
-    ruta = destino or CONFIG.log_file
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    fichero = RotatingFileHandler(
-        ruta, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
-    fichero.setLevel(logging.DEBUG if debug else logging.INFO)
-    fichero.setFormatter(formato)
-    raiz.addHandler(fichero)
-
-    for ruidoso in ("httpx", "httpcore", "urllib3", "comtypes"):
-        logging.getLogger(ruidoso).setLevel(logging.WARNING)
-
-    if debug:
-        log.info("Modo depuración: el detalle va a %s", ruta)
-
-
-def run(argv: list[str] | None = None) -> int:
-    """Punto de entrada: monta la app Qt y entra en el bucle de eventos."""
-    args = _parsear_argumentos(argv)
-    configurar_logging(debug=args.debug)
+    if args is None:
+        args = parsear_argumentos(None)
+        configurar_logging(debug=args.debug)
+    if transcriptor is None:
+        # Camino de conveniencia (tests, `python -m nova.app`): aquí
+        # PyQt5 ya está importado, así que Whisper no va a poder cargar y
+        # el transcriptor caerá a Vosk. Para uso normal, `run.py`.
+        log.warning("arrancando sin transcriptor precargado; usa run.py")
+        transcriptor = Transcriptor(
+            modelo=CONFIG.whisper_model,
+            compute_type=CONFIG.whisper_compute,
+            device=CONFIG.whisper_device,
+            vosk_model=CONFIG.vosk_model,
+        )
 
     app = QApplication(sys.argv)
     app.setApplicationName("NOVA")
     # Sin ventanas visibles no debe morir: NOVA vive en overlays.
     app.setQuitOnLastWindowClosed(False)
 
-    nova = Nova(app)
+    nova = Nova(app, transcriptor)
     nova.start()
     return app.exec_()

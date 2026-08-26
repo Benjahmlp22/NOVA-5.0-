@@ -85,6 +85,41 @@ def preparar_dlls() -> list[Path]:
     return añadidas
 
 
+def precargar_runtime() -> bool:
+    """Importa CTranslate2 pronto. NO basta por sí solo — ver abajo.
+
+    El modelo de Whisper hay que **construirlo antes de que exista la
+    QApplication**. Si no, NOVA muere con un *segmentation fault* limpio:
+    sin traceback de Python, sin excepción, sin nada que apunte a la
+    causa. Reproducido el 26/08 en un script mínimo con sólo PyQt5 y
+    faster-whisper:
+
+        cargar Whisper → crear QApplication            ✓ funciona
+        crear QApplication → cargar Whisper            ✗ segfault
+        crear QApplication → cargar en otro hilo       ✗ segfault
+
+    O sea que no es cosa de hilos, es el orden. Qt inicializa su propio
+    estado de carga de DLL y después de eso construir el modelo revienta
+    el proceso.
+
+    Con un QApplication vacío y sin bucle de eventos, adelantar sólo este
+    import parecía suficiente — y en la app real, con widgets y
+    `exec_()` corriendo, seguía cayendo dentro de `WhisperModel.__init__`
+    (faulthandler dixit). Así que el import se adelanta igual, pero quien
+    de verdad evita el fallo es cargar el transcriptor entero en `run()`
+    antes de montar Qt.
+    """
+    preparar_dlls()
+    try:
+        import ctranslate2  # noqa: F401
+
+        log.debug("CTranslate2 precargado antes de Qt")
+        return True
+    except Exception:  # noqa: BLE001
+        log.debug("faster-whisper no está instalado; nada que precargar", exc_info=True)
+        return False
+
+
 def hay_gpu() -> bool:
     """¿Hay una GPU que CTranslate2 pueda usar de verdad?
 

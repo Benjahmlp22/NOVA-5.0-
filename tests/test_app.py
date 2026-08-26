@@ -95,7 +95,7 @@ def test_debug_manda_el_detalle_al_fichero_y_deja_limpia_la_consola(tmp_path, lo
     """
     import logging
 
-    from nova.app import configurar_logging
+    from nova.bootstrap import configurar_logging
 
     destino = tmp_path / "nova.log"
     configurar_logging(debug=True, destino=destino)
@@ -117,7 +117,7 @@ def test_debug_manda_el_detalle_al_fichero_y_deja_limpia_la_consola(tmp_path, lo
 def test_sin_debug_el_fichero_no_se_llena_de_parciales(tmp_path, logging_restaurado):
     import logging
 
-    from nova.app import configurar_logging
+    from nova.bootstrap import configurar_logging
 
     destino = tmp_path / "nova.log"
     configurar_logging(debug=False, destino=destino)
@@ -139,7 +139,7 @@ def test_configurar_dos_veces_no_duplica_handlers(tmp_path, logging_restaurado):
     """
     import logging
 
-    from nova.app import configurar_logging
+    from nova.bootstrap import configurar_logging
 
     configurar_logging(destino=tmp_path / "a.log")
     n_primera = len(logging.getLogger().handlers)
@@ -149,7 +149,7 @@ def test_configurar_dos_veces_no_duplica_handlers(tmp_path, logging_restaurado):
 
 def test_el_fichero_de_log_rota_y_no_crece_sin_fin(tmp_path, logging_restaurado):
     """Con --debug cada frase deja varias líneas; sin rotación se come el disco."""
-    from nova.app import configurar_logging
+    from nova.bootstrap import configurar_logging
 
     configurar_logging(destino=tmp_path / "nova.log")
     ficheros = [h for h in __import__("logging").getLogger().handlers

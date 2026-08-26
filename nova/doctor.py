@@ -67,10 +67,12 @@ def revisar_entorno() -> None:
 
     try:
         import vosk  # noqa: F401
-        estado = BIEN if CONFIG.voice_available else MAL
-        print(f"  {estado} Vosk        modelo: {CONFIG.vosk_model}")
-        if not CONFIG.voice_available:
-            print("      No hay modelo ahí. Mira NOVA_VOSK_MODEL en .env.")
+        estado = BIEN if CONFIG.wake_model_available else MAL
+        print(f"  {estado} Etapa 1     {CONFIG.wake_model}")
+        if not CONFIG.wake_model_available:
+            print("      No hay modelo ahí. Mira NOVA_WAKE_MODEL en .env.")
+        print(f"  · Reserva     {CONFIG.vosk_model.name} "
+              f"(sólo si faster-whisper no está disponible)")
     except ImportError:
         print(f"  {MAL} falta vosk")
 
@@ -192,75 +194,79 @@ def informar_nivel(senal) -> bool:
 
 # ── Transcripción ────────────────────────────────────────────────────
 
-def transcribir_vosk(senal) -> tuple[str, float]:
-    import json
-
-    from vosk import KaldiRecognizer, Model, SetLogLevel
-
-    SetLogLevel(-1)
-    t0 = time.monotonic()
-    modelo = Model(str(CONFIG.vosk_model))
-    carga = time.monotonic() - t0
-
-    rec = KaldiRecognizer(modelo, SAMPLE_RATE)
-    rec.SetWords(False)
-    t0 = time.monotonic()
-    rec.AcceptWaveform(a_int16(senal))
-    texto = json.loads(rec.FinalResult() or "{}").get("text", "")
-    print(f"      (modelo cargado en {carga:.1f}s)")
-    return texto, time.monotonic() - t0
-
-
-def transcribir_whisper(senal, tamano: str) -> tuple[str, float]:
-    from .voice.cuda import hay_gpu, preparar_dlls
-
-    preparar_dlls()
-    from faster_whisper import WhisperModel
-
-    device = "cuda" if hay_gpu() else "cpu"
-    tipo = "int8_float16" if device == "cuda" else "int8"
-    t0 = time.monotonic()
-    modelo = WhisperModel(tamano, device=device, compute_type=tipo)
-    carga = time.monotonic() - t0
-
-    t0 = time.monotonic()
-    segmentos, _ = modelo.transcribe(senal, language="es", beam_size=5)
-    texto = " ".join(s.text for s in segmentos).strip()
-    print(f"      ({tamano} en {device}, cargado en {carga:.1f}s)")
-    return texto, time.monotonic() - t0
-
-
 def comparar(senal, *, whisper: bool, tamano: str) -> None:
+    """Pasa el audio por las DOS etapas, tal cual las usa NOVA."""
     _titulo("Qué entiende cada etapa")
     normalizada = normalizar(senal)
 
-    resultados: list[tuple[str, str, float]] = []
-
-    print(f"\n  Etapa 1 — Vosk ({CONFIG.vosk_model.name}), la que oye «NOVA»:")
+    # ── Etapa 1: la puerta ───────────────────────────────────────────
+    print(f"\n  Etapa 1 — Vosk ({CONFIG.wake_model.name}) + gramática:")
+    print("     Sólo decide si merece la pena escuchar mejor. Salta de más")
+    print("     a propósito; quien confirma es la etapa 2.")
     try:
-        texto, dt = transcribir_vosk(normalizada)
-        resultados.append(("Vosk", texto, dt))
-    except Exception as exc:
+        from .voice.wake import DetectorWake
+
+        detector = DetectorWake(CONFIG.wake_model, CONFIG.wake_word)
+        t0 = time.monotonic()
+        cargado = detector.cargar()
+        carga = time.monotonic() - t0
+        if not cargado:
+            print(f"      {MAL} {detector.error}")
+        else:
+            t0 = time.monotonic()
+            abre = False
+            paso = SAMPLE_RATE // 20  # bloques de 50 ms, como en marcha
+            for i in range(0, senal.size, paso):
+                if detector.escucha(a_int16(normalizada[i:i + paso])):
+                    abre = True
+                    break
+            veredicto = "ABRE la puerta" if abre else "no abre"
+            gram = "con gramática" if detector.usa_gramatica else "SIN gramática (modelo antiguo)"
+            print(f"      {BIEN if abre else '·'} {veredicto} — {gram}, "
+                  f"{time.monotonic() - t0:.2f}s (carga {carga:.1f}s)")
+    except Exception as exc:  # noqa: BLE001
         print(f"      {MAL} falló: {exc}")
 
-    if whisper:
-        print("\n  Etapa 2 — faster-whisper, la que entiende la orden:")
-        try:
-            texto, dt = transcribir_whisper(normalizada, tamano)
-            resultados.append((f"whisper {tamano}", texto, dt))
-        except Exception as exc:
-            print(f"      {MAL} falló: {exc}")
+    if not whisper:
+        return
 
-    print()
-    print("  " + "─" * 68)
-    for nombre, texto, dt in resultados:
-        print(f"  {nombre:<16} {dt:5.2f}s   «{texto}»")
-    print("  " + "─" * 68)
+    # ── Etapa 2: entender ────────────────────────────────────────────
+    print(f"\n  Etapa 2 — faster-whisper {tamano}, la que entiende de verdad:")
+    try:
+        from .voice.transcriptor import Transcriptor
 
-    hay_dos = len(resultados) == 2 and all(texto for _, texto, _ in resultados)
-    if hay_dos and resultados[0][1].strip().lower() != resultados[1][1].strip().lower():
-        print("\n  Los dos entienden cosas distintas: eso es exactamente el")
-        print("  motivo de la etapa 2. Whisper es el que manda para la orden.")
+        tr = Transcriptor(
+            modelo=tamano,
+            compute_type=CONFIG.whisper_compute,
+            device=CONFIG.whisper_device,
+            vosk_model=CONFIG.vosk_model,
+        )
+        t0 = time.monotonic()
+        if not tr.cargar():
+            print(f"      {MAL} {tr.error}")
+            return
+        carga = time.monotonic() - t0
+        tr.precalentar()
+
+        t0 = time.monotonic()
+        texto = tr.transcribir(normalizada)
+        dt = time.monotonic() - t0
+        print(f"      {tr.motor}, carga {carga:.1f}s")
+        print()
+        print("  " + "─" * 68)
+        print(f"  entendido en {dt:.2f}s:")
+        print(f"     «{texto}»")
+        print("  " + "─" * 68)
+
+        from .voice.wake import normalizar_texto
+
+        if CONFIG.wake_word in normalizar_texto(texto).split():
+            print(f"\n  {BIEN} El nombre «{CONFIG.wake_word}» está: NOVA despertaría.")
+        else:
+            print(f"\n  · El nombre «{CONFIG.wake_word}» no está: si esto viniera de")
+            print("    la etapa 1, NOVA volvería a dormir sin hacer ruido.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"      {MAL} falló: {exc}")
 
 
 def guardar_wav(senal, ruta: Path) -> None:
@@ -285,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--listar", action="store_true", help="sólo listar micrófonos y salir")
     p.add_argument("--device", type=int, default=None, help="índice del micrófono a probar")
     p.add_argument("--segundos", type=float, default=5.0)
-    p.add_argument("--modelo-whisper", default="small")
+    p.add_argument("--modelo-whisper", default=None)
     p.add_argument("--sin-whisper", action="store_true")
     p.add_argument("--guardar", type=Path, default=None, help="guarda lo grabado en un WAV")
     args = p.parse_args(argv)
@@ -311,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
         print("\n  Sin señal no tiene sentido transcribir. Arregla el micro y repite.")
         return 1
 
-    comparar(senal, whisper=not args.sin_whisper, tamano=args.modelo_whisper)
+    comparar(senal, whisper=not args.sin_whisper,
+             tamano=args.modelo_whisper or CONFIG.whisper_model)
     print()
     return 0
 

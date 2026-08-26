@@ -32,9 +32,10 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Barrido de bugs de NOVA4 | **hecho** — ver "Lo que se arregló" |
 | Logs con niveles y `--debug` | **hecho** |
 | faster-whisper en la RTX 3060 | **verificado** — 1.6 % WER, 0.28 s/frase, 365 MiB |
-| STT en dos etapas dentro de la app | pendiente |
+| STT en dos etapas dentro de la app | **hecho** |
 | `python -m nova.doctor` | **hecho** |
 | Banco de pruebas WER + grabador de corpus | **hecho** |
+| Pre-roll, VAD y unmute sin perder el principio | **hecho** |
 | Panel abajo a la derecha | pendiente |
 | Búsqueda en internet | pendiente |
 | Presupuesto de RAM/VRAM medido | **hecho** |

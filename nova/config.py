@@ -25,30 +25,66 @@ def _env_bool(key: str, default: bool) -> bool:
     return _env(key, str(default)).lower() in ("1", "true", "yes", "on", "si", "sí")
 
 
-def _find_vosk_model() -> Path:
-    """Localiza el modelo de voz.
+def _es_modelo(p: Path) -> bool:
+    return (p / "am").exists() or (p / "conf").exists()
 
-    Orden: variable de entorno → carpeta local → modelos ya descargados
-    en proyectos vecinos (evita duplicar 1.4 GB en disco).
-    """
-    explicit = os.getenv("NOVA_VOSK_MODEL")
-    if explicit:
-        return Path(explicit)
 
-    candidates = [
-        ROOT / "models" / "vosk",
-        ROOT.parent / "NOVA3.0-2027" / "data" / "models" / "vosk" / "vosk-model-es-0.42",
-        ROOT.parent / "NOVA" / "vosk-model-small-es-0.42",
-    ]
-    for c in candidates:
-        if (c / "am").exists() or (c / "conf").exists():
+def _buscar(candidatos: list[Path]) -> Path:
+    for c in candidatos:
+        if _es_modelo(c):
             return c
         # ¿Es una carpeta contenedora con el modelo dentro?
         if c.is_dir():
             for child in sorted(c.iterdir()):
-                if child.is_dir() and (child / "am").exists():
+                if child.is_dir() and _es_modelo(child):
                     return child
-    return candidates[0]
+    return candidatos[0]
+
+
+def _find_wake_model() -> Path:
+    """Modelo de Vosk para la ETAPA 1: detectar «NOVA» y nada más.
+
+    Se prefiere el SMALL (58 MB) y no es por ahorrar: está medido el
+    26/08 sobre 14 frases (8 con "nova", 6 trampas del tipo "no va a
+    funcionar el mando").
+
+        vosk-model-es-0.42 (2.3 GB)   despierta 4/8   falsas 4/6   47.2 s
+        vosk-model-small   (58 MB)    despierta 5/8   falsas 3/6    0.4 s
+        small + gramática ["nova"]    despierta 8/8   falsas 5/6    0.4 s
+
+    El grande es PEOR que el pequeño en las dos columnas, y además no
+    admite gramática restringida ("Runtime graphs are not supported by
+    this model"), que es lo que sube el recall a 8/8. Sus 2.3 GB sólo
+    compraban 47 segundos de arranque sordo.
+
+    Que salte de más aquí da igual: esta etapa sólo abre la puerta, y la
+    etapa 2 confirma antes de que suene nada.
+    """
+    explicit = os.getenv("NOVA_WAKE_MODEL")
+    if explicit:
+        return Path(explicit)
+    return _buscar([
+        ROOT / "models" / "vosk-small",
+        ROOT.parent / "NOVA3.0-2027" / "data" / "models" / "vosk" / "vosk-model-small-es-0.42",
+        ROOT.parent / "NOVA" / "vosk-model-small-es-0.42",
+        ROOT / "models" / "vosk",
+    ])
+
+
+def _find_vosk_model() -> Path:
+    """Modelo de Vosk grande, sólo como RESERVA de la etapa 2.
+
+    Si no hay CUDA o faster-whisper falla, NOVA transcribe con esto antes
+    que quedarse sorda. Peor (17.9% de WER contra 3.5%), pero viva.
+    """
+    explicit = os.getenv("NOVA_VOSK_MODEL")
+    if explicit:
+        return Path(explicit)
+    return _buscar([
+        ROOT / "models" / "vosk",
+        ROOT.parent / "NOVA3.0-2027" / "data" / "models" / "vosk" / "vosk-model-es-0.42",
+        ROOT.parent / "NOVA" / "vosk-model-small-es-0.42",
+    ])
 
 
 @dataclass(frozen=True)
@@ -82,7 +118,40 @@ class Config:
 
     # ── Voz ──────────────────────────────────────────────────────────
     wake_word: str = field(default_factory=lambda: _env("NOVA_WAKE_WORD", "nova").lower())
+    wake_model: Path = field(default_factory=_find_wake_model)
     vosk_model: Path = field(default_factory=_find_vosk_model)
+
+    # ── Etapa 2: transcripción de la orden ───────────────────────────
+    #
+    # Medido el 26/08 sobre 20 órdenes reales grabadas hablando:
+    #
+    #   Vosk es-0.42                17.9%  10/20  0.76 s
+    #   whisper small               16.1%  10/20  0.30 s
+    #   whisper small + vocabulario  9.3%  11/20  0.32 s
+    #   whisper medium              12.9%  13/20  0.61 s
+    #   whisper medium + vocabulario 3.5%  17/20  0.50 s   ← este
+    #   whisper large-v3-turbo      24.1%   8/20  0.61 s
+    #
+    # medium gana por 5x sobre Vosk por 560 MiB de VRAM y 0.2 s. Y turbo,
+    # que es más grande, es el peor de todos: en órdenes de cinco palabras
+    # el tamaño no compra nada.
+    whisper_model: str = field(default_factory=lambda: _env("NOVA_WHISPER_MODEL", "medium"))
+    whisper_compute: str = field(default_factory=lambda: _env("NOVA_WHISPER_COMPUTE", "int8_float16"))
+    whisper_device: str = field(default_factory=lambda: _env("NOVA_WHISPER_DEVICE", "auto"))
+
+    # ── Captura ──────────────────────────────────────────────────────
+    # Segundos de audio que se guardan SIEMPRE hacia atrás. Sin esto, el
+    # principio de la orden se pierde: cuando NOVA se entera de que la
+    # están llamando, esa parte del audio ya pasó.
+    preroll_s: float = field(default_factory=lambda: float(_env("NOVA_PREROLL", "1.0")))
+    # Silencio que cierra una frase. 0.7 s es el punto donde deja de
+    # cortar a mitad de frase (una coma da ~0.4 s) sin que la espera se
+    # note. Cuenta entera en la latencia de punta a punta.
+    silencio_fin_s: float = field(default_factory=lambda: float(_env("NOVA_SILENCIO_FIN", "0.7")))
+    # Tope duro de un enunciado: si el umbral no vuelve a bajar (ruido
+    # continuo, ventilador), no se puede grabar para siempre.
+    max_enunciado_s: float = field(default_factory=lambda: float(_env("NOVA_MAX_ENUNCIADO", "12")))
+    mic_exclusive: bool = field(default_factory=lambda: _env_bool("NOVA_MIC_EXCLUSIVO", False))
     # Segundos de silencio tras despertar antes de volver a dormir.
     awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "20")))
     tts_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_TTS", True))
@@ -121,7 +190,11 @@ class Config:
 
     @property
     def voice_available(self) -> bool:
-        return (self.vosk_model / "am").exists() or (self.vosk_model / "conf").exists()
+        return _es_modelo(self.wake_model) or _es_modelo(self.vosk_model)
+
+    @property
+    def wake_model_available(self) -> bool:
+        return _es_modelo(self.wake_model)
 
 
 CONFIG = Config()
