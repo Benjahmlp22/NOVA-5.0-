@@ -88,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--micro", default="", help="filtra por nombre, p.ej. G435")
     p.add_argument("--sufijo", default="benja")
     p.add_argument("--desde", type=int, default=1, help="empezar por la frase N")
+    p.add_argument("--frases", type=Path, default=FRASES,
+                   help="fichero de frases a grabar (por defecto bench/frases.txt)")
     args = p.parse_args(argv)
 
     camino = _elegir_camino(args)
@@ -95,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         print("✗ No hay ningún camino de captura utilizable.")
         return 1
 
-    frases = [ln.strip() for ln in FRASES.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    frases = [ln.strip() for ln in args.frases.read_text(encoding="utf-8").splitlines() if ln.strip()]
     DESTINO.mkdir(parents=True, exist_ok=True)
 
     print(f"Camino: {camino.etiqueta} @ {camino.tasa} Hz → {SAMPLE_RATE} Hz")

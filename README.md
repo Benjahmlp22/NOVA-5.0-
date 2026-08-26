@@ -109,39 +109,51 @@ NOVA_TTS=true
 
 ## Reconocimiento de voz: qué se eligió y con qué números
 
-Medido el 26/08/2026 en esta máquina (RTX 3060 12 GB, Ryzen 5 5600G),
-20 órdenes reales, el mismo audio y el mismo remuestreo para todos.
+Medido el 26/08/2026 en esta máquina (RTX 3060 12 GB, Ryzen 5 5600G)
+sobre **20 órdenes reales grabadas hablando** (`bench/grabar.py`), con el
+mismo audio y el mismo remuestreo para todos.
 
-| motor | WER | exactas | latencia/frase | carga | VRAM |
-|---|---|---|---|---|---|
-| Vosk `es-0.42` | 6.1 % | 18/20 | 0.46 s | 31.5 s | — (CPU) |
-| faster-whisper `small` | **1.6 %** | 18/20 | **0.28 s** | **2.66 s** | **365 MiB** |
-| faster-whisper `medium` | 1.6 % | 18/20 | 0.46 s | 4.02 s | 924 MiB |
-| faster-whisper `large-v3-turbo` | 2.1 % | 17/20 | 0.48 s | 4.22 s | 1024 MiB |
+| motor | WER | exactas | latencia/frase | VRAM |
+|---|---|---|---|---|
+| Vosk `es-0.42` | 17.9 % | 10/20 | 0.76 s | — (CPU) |
+| faster-whisper `small` | 16.1 % | 10/20 | 0.30 s | 365 MiB |
+| faster-whisper `small` + vocabulario | 10.2 % | 13/20 | 0.31 s | 365 MiB |
+| faster-whisper `medium` | 12.9 % | 13/20 | 0.63 s | 924 MiB |
+| **faster-whisper `medium` + vocabulario** | **6.5 %** | **16/20** | 0.63 s | 924 MiB |
+| faster-whisper `large-v3-turbo` | 24.1 % | 8/20 | 0.61 s | 1024 MiB |
+| faster-whisper `large-v3-turbo` + vocabulario | 19.1 % | 9/20 | 0.56 s | 1024 MiB |
 
-**Gana `small`**, y no por poco: iguala o mejora a los grandes en
-precisión siendo 1.6× más rápido y ocupando un tercio de VRAM. Subir a
-`medium` no compra nada aquí, y `large-v3-turbo` sale peor — más grande
-no es más listo cuando las frases son órdenes de cinco palabras.
+**Gana `medium` con vocabulario**: 2.7× menos error que Vosk y 2.5× menos
+que `small` a secas, por 0.3 s más de latencia y 560 MiB de VRAM que en
+una tarjeta de 12 GB sobran.
 
-Dos advertencias sobre esa tabla, que importan más que la tabla:
+**El "+ vocabulario" es la mitad del resultado y sale gratis.** Es un
+`initial_prompt` con las palabras que NOVA oye todos los días — Discord,
+Spotify, bloc de notas, RTX 4070, vatios — que el decodificador ve como
+contexto previo. Sin él, Whisper escribía "blog de notas", "calor
+favorito" y "cuánta **de morir a** RAM". Baja el WER de 16.1 % a 10.2 %
+en `small` y de 12.9 % a 6.5 % en `medium`, **sin coste de latencia
+medible**. No hay ninguna frase del corpus dentro del prompt.
 
-**Es audio sintético** (`bench/sintetizar.py`, voz SAPI5 de Windows). Sin
-ruido de sala, sin el remuestreo del micro, sin la prosodia de alguien
-con prisa. Sirvió para lo que tenía que servir — probar que faster-whisper
-funciona en la 3060 sin necesitar micrófono — y para nada más. Los
-números que decidirán de verdad salen de `bench/grabar.py`.
+`large-v3-turbo` es el peor de los tres, con y sin vocabulario. Más
+grande no es más listo cuando las frases son órdenes de cinco palabras.
 
-**Vosk acierta 18 de 20 con audio limpio.** Su modelo de español no es el
-desastre que parecía desde fuera. Lo que falla en el uso real es el
-*camino del audio*: captura por MME remuestreando 44.1 → 16 kHz, el mute
-que se come el principio de cada orden, y una segmentación que parte una
-frase en dos comandos. Por eso la Fase 2 ataca primero la tubería
-(WASAPI, pre-roll, VAD) y no sólo el modelo.
+### Por qué NO hay que fiarse del audio sintético
 
-Aun así, uno de los dos fallos de Vosk con audio perfecto fue
-`cierra chrome` → «sierra crom», que es de las órdenes más comunes que
-existen. Whisper la acierta.
+La primera versión de esta tabla se midió con la voz SAPI5 de Windows,
+porque el micrófono no estaba disponible. Daba esto:
+
+| motor | WER sintético | WER voz real |
+|---|---|---|
+| Vosk `es-0.42` | 6.1 % | 17.9 % |
+| faster-whisper `small` | 1.6 % | 16.1 % |
+| faster-whisper `medium` | 1.6 % | 12.9 % |
+
+Con voz sintética `small` empataba con `medium` y la conclusión era "no
+subas de small". Con voz real, `medium` gana claramente. El audio
+sintético sirvió para lo que tenía que servir —comprobar que
+faster-whisper funciona en la 3060 sin necesitar micrófono— y **su
+conclusión sobre qué modelo usar era falsa**.
 
 ## Presupuesto de recursos
 

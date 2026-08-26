@@ -179,6 +179,22 @@ def correr_vosk(senales: list, referencias: list[str], modelo: Path) -> Resultad
     return res
 
 
+# Vocabulario que NOVA oye todos los días y Whisper no espera. Se le pasa
+# como `initial_prompt`: el decodificador lo ve como contexto previo, así
+# que estas grafías dejan de ser sorpresas.
+#
+# No es hacer trampa al banco: son las palabras que el usuario dice de
+# verdad a este asistente, y un asistente que no conoce los nombres de
+# las apps que abre no sirve. Lo que sí sería trampa es meter aquí las
+# frases del corpus, y no está ninguna.
+PROMPT_DOMINIO = (
+    "Órdenes habladas a un asistente de escritorio en español. "
+    "Vocabulario habitual: Discord, Chrome, Spotify, Steam, WhatsApp, "
+    "Visual Studio Code, bloc de notas, captura de pantalla, memoria RAM, "
+    "volumen, RTX 4070, vatios, fuente de alimentación, carpeta, archivo."
+)
+
+
 def correr_whisper(
     senales: list,
     referencias: list[str],
@@ -186,8 +202,10 @@ def correr_whisper(
     tamano: str,
     compute_type: str,
     device: str,
+    prompt: str = "",
 ) -> Resultado:
-    res = Resultado(motor=f"faster-whisper {tamano} ({device}/{compute_type})")
+    etiqueta_prompt = " +vocab" if prompt else ""
+    res = Resultado(motor=f"faster-whisper {tamano}{etiqueta_prompt} ({device}/{compute_type})")
     try:
         from nova.voice.cuda import preparar_dlls
 
@@ -206,7 +224,17 @@ def correr_whisper(
         try:
             # language="es" fijo: dejar que lo detecte cuesta una pasada
             # extra y, en órdenes de dos palabras, se equivoca.
-            segmentos, _ = modelo.transcribe(senal, language="es", beam_size=5)
+            segmentos, _ = modelo.transcribe(
+                senal,
+                language="es",
+                beam_size=5,
+                initial_prompt=prompt or None,
+                # Cada orden es independiente: arrastrar la anterior como
+                # contexto hace que una transcripción mala contamine la
+                # siguiente, y en un asistente los turnos no son un texto
+                # continuo.
+                condition_on_previous_text=False,
+            )
             texto = " ".join(s.text for s in segmentos).strip()
         except Exception as exc:
             res.error = f"falló transcribiendo: {exc}"
@@ -257,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--device", default="auto", help="cuda, cpu o auto")
     p.add_argument("--sin-vosk", action="store_true")
     p.add_argument("--sin-whisper", action="store_true")
+    p.add_argument("--con-vocabulario", action="store_true",
+                   help="prueba tambien Whisper con el vocabulario de NOVA como contexto")
     args = p.parse_args(argv)
 
     if not FRASES.exists():
@@ -306,6 +336,15 @@ def main(argv: list[str] | None = None) -> int:
             compute_type=args.compute_type if device == "cuda" else "int8",
             device=device,
         ))
+        if args.con_vocabulario:
+            print(f"→ faster-whisper {args.whisper_modelo} + vocabulario de NOVA...")
+            resultados.append(correr_whisper(
+                senales, usadas,
+                tamano=args.whisper_modelo,
+                compute_type=args.compute_type if device == "cuda" else "int8",
+                device=device,
+                prompt=PROMPT_DOMINIO,
+            ))
 
     informe(resultados, usadas)
     return 0
