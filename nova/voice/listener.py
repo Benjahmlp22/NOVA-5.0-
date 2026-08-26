@@ -75,6 +75,19 @@ from .wake import DetectorWake, normalizar_texto
 
 log = logging.getLogger("nova.voice.listener")
 
+# Para cortar a NOVA hablando hace falta hablar CLARO: 2.5 veces el
+# umbral normal de voz. Con el umbral pelado, cualquier ruido de fondo la
+# callaría a media frase, que es peor que no poder cortarla.
+FACTOR_INTERRUPCION = 2.5
+
+# Y sólo cuenta cuando ella está callada. Si suena por encima de esto,
+# lo que entra por el micro es su propia voz rebotando en los altavoces.
+NIVEL_SALIDA_ALTO = 0.02
+
+# 3 bloques de 50 ms = 150 ms de voz sostenida. Distingue una frase de
+# un golpe en la mesa.
+BLOQUES_INTERRUPCION = 3
+
 # Frases con las que el usuario cierra la conversación. No son comandos:
 # no se le mandan al modelo, cierran el turno y NOVA vuelve a dormir.
 # Respuestas de una palabra que SÍ son un turno válido: contestan a una
@@ -113,6 +126,7 @@ class VoiceListener:
         silencio_fin_s: float = 0.7,
         max_enunciado_s: float = 12.0,
         seguimiento_s: float = 8.0,
+        interrumpir: bool = True,
         on_wake: Callable[[bool], None] | None = None,
         on_command: Callable[[str], None] | None = None,
         on_sleep: Callable[[str], None] | None = None,
@@ -120,6 +134,7 @@ class VoiceListener:
         on_error: Callable[[str], None] | None = None,
         on_escuchando: Callable[[], None] | None = None,
         on_nivel: Callable[[float], None] | None = None,
+        on_interrupcion: Callable[[], None] | None = None,
     ) -> None:
         self.wake_word = normalizar_texto(wake_word)
         self.detector = detector or DetectorWake(wake_model, self.wake_word)
@@ -133,6 +148,7 @@ class VoiceListener:
         self.silencio_fin_s = silencio_fin_s
         self.max_enunciado_s = max_enunciado_s
         self.seguimiento_s = seguimiento_s
+        self.interrumpir = interrumpir
 
         self._on_wake = on_wake or (lambda con_comando: None)
         self._on_command = on_command or (lambda t: None)
@@ -142,6 +158,7 @@ class VoiceListener:
         self._on_escuchando = on_escuchando or (lambda: None)
         # Nivel real del micro, para que la onda del panel no mienta.
         self._on_nivel = on_nivel or (lambda nivel: None)
+        self._on_interrupcion = on_interrupcion or (lambda: None)
 
         self._awake = False
         self._running = False
@@ -150,6 +167,10 @@ class VoiceListener:
         self._thread: threading.Thread | None = None
         self._umbral = 0.006
         self._ultimo_turno = 0.0
+        # Nivel del audio que NOVA está reproduciendo ahora mismo. Sirve
+        # para no confundir su propia voz con la del usuario.
+        self._nivel_salida = 0.0
+        self._bloques_hablando_encima = 0
         self.error = ""
 
         # Búfer circular: el último segundo, siempre. Se dimensiona en
@@ -174,6 +195,18 @@ class VoiceListener:
     def mute(self) -> None:
         """Deja de procesar audio mientras NOVA habla, para no oírse."""
         self._muted.set()
+        self._bloques_hablando_encima = 0
+
+    def nivel_salida(self, nivel: float) -> None:
+        """Cuánto suena NOVA en este instante, para distinguirla de ti.
+
+        Es la clave de poder cortarla hablando. Si el micro se dispara a
+        la vez que ella habla fuerte, lo más probable es que sea su
+        propia voz rebotando; si se dispara en una PAUSA suya, es alguien
+        de carne y hueso. Con cascos no hay rebote y esto sobra, pero con
+        altavoces sin ello NOVA se interrumpiría a sí misma sin parar.
+        """
+        self._nivel_salida = max(0.0, float(nivel))
 
     def unmute(self) -> None:
         """Vuelve a escuchar, TIRANDO lo capturado mientras hablaba.
@@ -191,6 +224,27 @@ class VoiceListener:
         """
         self._preroll.clear()
         self._muted.clear()
+
+    def _me_estan_interrumpiendo(self, nivel: float) -> bool:
+        """¿Hay alguien hablando por encima de NOVA?
+
+        Dos condiciones a la vez, y las dos hacen falta:
+
+        - El micro tiene que estar bastante por encima del umbral normal
+          de voz. Un carraspeo o un clic de ratón no cortan una frase.
+        - Y NOVA tiene que estar en una PAUSA de la suya. Si suena fuerte
+          a la vez que ella, con altavoces eso es su propio eco.
+
+        Además se exigen varios bloques seguidos: 150 ms de voz sostenida
+        distinguen "me está hablando" de un golpe en la mesa.
+        """
+        if not self.interrumpir:
+            return False
+        if self._nivel_salida > NIVEL_SALIDA_ALTO or nivel < self._umbral * FACTOR_INTERRUPCION:
+            self._bloques_hablando_encima = 0
+            return False
+        self._bloques_hablando_encima += 1
+        return self._bloques_hablando_encima >= BLOQUES_INTERRUPCION
 
     def _en_seguimiento(self) -> bool:
         """¿Sigue abierto el turno como para hablarle sin decir su nombre?
@@ -366,6 +420,12 @@ class VoiceListener:
                 self._preroll.append(bloque)
 
                 if self._muted.is_set():
+                    if self._me_estan_interrumpiendo(rms(bloque)):
+                        log.info("me interrumpen: dejo de hablar y escucho")
+                        self._on_interrupcion()
+                        self._muted.clear()
+                        self._capturar(cola, camino,
+                                       exige_nombre=not self._en_seguimiento())
                     continue
 
                 # El reloj cuenta desde el último TURNO de verdad, no

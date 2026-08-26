@@ -157,6 +157,9 @@ class Config:
     # Con los veinte del timeout de sueño, NOVA procesaba como órdenes
     # todo lo que se dijera en la habitación durante ese rato.
     seguimiento_s: float = field(default_factory=lambda: float(_env("NOVA_SEGUIMIENTO", "8")))
+    # Poder cortarla hablando por encima. Con altavoces en vez de cascos,
+    # si NOVA se interrumpe a sí misma por su propio eco, ponlo a false.
+    interrumpir: bool = field(default_factory=lambda: _env_bool("NOVA_INTERRUMPIR", True))
     # Segundos de silencio tras despertar antes de volver a dormir.
     awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "20")))
     tts_enabled: bool = field(default_factory=lambda: _env_bool("NOVA_TTS", True))

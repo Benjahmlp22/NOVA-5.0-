@@ -317,3 +317,62 @@ def test_mandarla_callar_funciona(frase):
     oyente._entender(_audio(), exige_nombre=False)
     assert eventos == [("dormir", "despedida")]
     assert not oyente.awake
+
+
+# ── Cortarla hablando ────────────────────────────────────────────────
+#
+# Sin esto había que esperar a que terminara la frase para poder
+# corregirla, que es justo cuando más ganas dan de cortarla. Lo difícil
+# no es detectar voz: es no confundir la voz de NOVA con la tuya.
+
+def _oyente_hablando(**kw):
+    oyente, eventos = _oyente(**kw)
+    oyente.mute()
+    return oyente, eventos
+
+
+def test_hablarle_por_encima_la_calla():
+    oyente, _ = _oyente_hablando()
+    oyente._umbral = 0.004
+    oyente.nivel_salida(0.0)          # NOVA en una pausa
+    fuerte = 0.004 * 3
+    for _ in range(3):
+        salta = oyente._me_estan_interrumpiendo(fuerte)
+    assert salta
+
+
+def test_su_propia_voz_no_la_interrumpe():
+    """Con altavoces, el micro recoge a NOVA. Sin esto se cortaría sola."""
+    oyente, _ = _oyente_hablando()
+    oyente._umbral = 0.004
+    oyente.nivel_salida(0.3)          # NOVA sonando fuerte
+    for _ in range(10):
+        salta = oyente._me_estan_interrumpiendo(0.5)
+    assert not salta
+
+
+def test_un_ruido_flojo_no_corta_una_frase():
+    oyente, _ = _oyente_hablando()
+    oyente._umbral = 0.004
+    oyente.nivel_salida(0.0)
+    for _ in range(10):
+        salta = oyente._me_estan_interrumpiendo(0.005)  # apenas sobre el umbral
+    assert not salta
+
+
+def test_hace_falta_voz_sostenida_no_un_golpe():
+    """Un golpe en la mesa dura menos que "no, espera"."""
+    oyente, _ = _oyente_hablando()
+    oyente._umbral = 0.004
+    oyente.nivel_salida(0.0)
+    assert not oyente._me_estan_interrumpiendo(0.05)   # un solo bloque
+    assert not oyente._me_estan_interrumpiendo(0.05)   # dos
+    assert oyente._me_estan_interrumpiendo(0.05)       # 150 ms ya sí
+
+
+def test_se_puede_apagar_del_todo():
+    oyente, _ = _oyente_hablando(interrumpir=False)
+    oyente._umbral = 0.004
+    oyente.nivel_salida(0.0)
+    for _ in range(20):
+        assert not oyente._me_estan_interrumpiendo(0.5)

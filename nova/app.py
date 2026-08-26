@@ -131,6 +131,7 @@ class Nova(QObject):
     _voz_lista = pyqtSignal()
     _voz_error = pyqtSignal(str)
     _voz_escuchando = pyqtSignal()
+    _voz_interrumpe = pyqtSignal()
     _habla_inicio = pyqtSignal()
     _habla_fin = pyqtSignal()
     # El nivel llega desde el hilo de audio y desde el de TTS, ~30 veces
@@ -177,7 +178,9 @@ class Nova(QObject):
             enabled=CONFIG.tts_enabled,
             on_start=self._habla_inicio.emit,
             on_end=self._habla_fin.emit,
-            on_nivel=self._nivel.emit,
+            # Su nivel va a dos sitios: al panel y al oyente. Ver
+            # `_nivel_voz_nova`.
+            on_nivel=self._nivel_voz_nova,
         )
         # Etapa 2: entiende la orden Y confirma que el nombre estaba de
         # verdad. Llega ya cargado desde `run()`, antes de que existiera
@@ -198,7 +201,6 @@ class Nova(QObject):
             preroll_s=CONFIG.preroll_s,
             silencio_fin_s=CONFIG.silencio_fin_s,
             max_enunciado_s=CONFIG.max_enunciado_s,
-            seguimiento_s=CONFIG.seguimiento_s,
             on_wake=self._voz_despierta.emit,
             on_command=self._voz_comando.emit,
             on_sleep=self._voz_dormir.emit,
@@ -206,6 +208,9 @@ class Nova(QObject):
             on_error=self._voz_error.emit,
             on_escuchando=self._voz_escuchando.emit,
             on_nivel=self._nivel.emit,
+            on_interrupcion=self._voz_interrumpe.emit,
+            seguimiento_s=CONFIG.seguimiento_s,
+            interrumpir=CONFIG.interrumpir,
         )
         self._voz_despierta.connect(self._al_despertar)
         self._voz_comando.connect(self._al_comando)
@@ -213,6 +218,7 @@ class Nova(QObject):
         self._voz_lista.connect(self._al_voz_lista)
         self._voz_error.connect(self._al_voz_error)
         self._voz_escuchando.connect(self._al_voz_escuchando)
+        self._voz_interrumpe.connect(self._al_interrumpirme)
         self._nivel.connect(self.ui.set_nivel)
         self._habla_inicio.connect(self._hablando_inicio)
         self._habla_fin.connect(self._hablando_fin)
@@ -262,6 +268,26 @@ class Nova(QObject):
     def _al_voz_lista(self) -> None:
         self.ui.set_estado("dormida")
         log.info("NOVA lista (%s). Di «%s».", self.transcriptor.motor, CONFIG.wake_word)
+
+    def _nivel_voz_nova(self, nivel: float) -> None:
+        """El nivel de lo que NOVA está diciendo, a dos sitios.
+
+        Al panel para pintar la onda, y al oyente para que sepa
+        distinguir su propia voz de la tuya cuando la interrumpes.
+        """
+        self._nivel.emit(nivel)
+        self.listener.nivel_salida(nivel)
+
+    def _al_interrumpirme(self) -> None:
+        """Le has hablado por encima: se calla y te escucha.
+
+        Sin esto había que esperar a que terminara la frase para poder
+        corregirla, que es justo cuando más ganas dan de cortarla.
+        """
+        log.info("me interrumpen")
+        self.speaker.shut_up()
+        self._respuesta_en_curso = ""
+        self.ui.set_estado("escucha")
 
     def _al_voz_escuchando(self) -> None:
         """La etapa 1 ha abierto la puerta: se está capturando la frase.
