@@ -183,6 +183,7 @@ def register(reg) -> None:  # noqa: ANN001
             "required": ["descripcion"],
         },
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="imagen.abrir",
@@ -206,4 +207,5 @@ def register(reg) -> None:  # noqa: ANN001
         description="Cuántas imágenes tiene ya miradas y cuántas le faltan",
         handler=revisar,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))

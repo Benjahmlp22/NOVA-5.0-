@@ -28,6 +28,7 @@ from typing import Any
 
 from ..llm.ollama import LLMResponse, OllamaClient, OllamaError
 from ..tools.registry import PendingConfirmation, ToolRegistry, ToolResult
+from .charla import es_pura_charla
 from .polish import es_relleno, frases_completas, pulir
 
 log = logging.getLogger("nova.agent")
@@ -214,7 +215,14 @@ class Agent:
             *history,
             {"role": "user", "content": user_message},
         ]
-        schemas = self.tools.llm_schemas(exclude=set(LLM_HIDDEN))
+        # A un "hola" o un "adiós" no se le enseña el catálogo. Medido con
+        # el modelo real: "adiós" llamaba a memory.forget, que BORRA
+        # cosas, y "hola" pedía tres herramientas de estado a la vez. Sin
+        # catálogo delante le es imposible; con el prompt sólo, no.
+        schemas = (
+            None if es_pura_charla(user_message)
+            else self.tools.llm_schemas(exclude=set(LLM_HIDDEN))
+        )
         used: list[str] = []
 
         for round_n in range(1, self.max_rounds + 1):
@@ -256,6 +264,7 @@ class Agent:
 
             aplazadas: list[PendingConfirmation] = []
             hechas: list[str] = []
+            directas = True
             for call in resp.tool_calls:
                 tool = self.tools.resolve(call.name)
                 if tool is None:
@@ -278,9 +287,26 @@ class Agent:
                 if outcome.ok:
                     used.append(tool.name)
                     hechas.append(outcome.message)
+                    directas = directas and tool.responde_sola
+                else:
+                    directas = False
                 # Éxito → frase en español tal cual. Fallo → también
                 # texto, pero explicando el error para que pueda reaccionar.
                 messages.append(self._tool_msg(call.name, outcome.message))
+
+            # Si todo lo de esta ronda informa por sí solo, ya está la
+            # respuesta: la del modelo sólo puede empeorarla, y encima
+            # cuesta otra vuelta entera.
+            if not aplazadas and hechas and directas and len(hechas) == len(resp.tool_calls):
+                self._status("writing")
+                # Sin pasar por `emisor.cerrar()`: si el modelo hubiera
+                # dicho algo suyo ("voy a mirarlo") mientras pedía la
+                # herramienta, cerrar() se callaría por no repetirse y la
+                # respuesta no llegaría a decirse NUNCA. Va aparte, y si
+                # acaso se oye "voy a mirarlo. Ocupa 1.8 gigas", que es
+                # exactamente lo que diría una persona.
+                return AgentReply(text=" ".join(hechas), tools_used=used,
+                                  rounds=round_n, ya_dicho=False)
 
             if aplazadas:
                 self._status("waiting")

@@ -158,18 +158,21 @@ def register(reg) -> None:  # noqa: ANN001
         description="Estado del PC: CPU, RAM, procesos, batería",
         handler=pc_status,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="pc.hardware",
         description="Specs del equipo: CPU, RAM, discos, sistema",
         handler=hardware,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="pc.active_window",
         description="Qué app o juego tiene delante: qué hace, juega o mira ahora",
         handler=active_window,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="pc.running_apps",
@@ -180,12 +183,14 @@ def register(reg) -> None:  # noqa: ANN001
             "properties": {"top_n": {"type": "integer"}},
         },
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="pc.network",
         description="IP local y si hay conexión a internet",
         handler=network,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="app.close",

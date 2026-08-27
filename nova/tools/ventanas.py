@@ -232,6 +232,7 @@ def register(reg) -> None:  # noqa: ANN001
         description="Qué ventanas tiene abiertas ahora mismo",
         handler=listar,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="ventana.cambiar",

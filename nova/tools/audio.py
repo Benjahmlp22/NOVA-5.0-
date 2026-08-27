@@ -125,9 +125,36 @@ def _listar(sesiones) -> str:  # noqa: ANN001
 
 # ── Volumen general ──────────────────────────────────────────────────
 
+def _a_porcentaje(valor) -> int | None:  # noqa: ANN001
+    """Lo que mande el modelo, convertido a 0-100. None si no hay forma.
+
+    Hace falta porque el modelo no respeta el esquema. Visto de verdad:
+    pidiéndole "baja el volumen de Spotify" mandó `level="0.5"`, y el
+    `int()` de antes reventaba con "invalid literal for int()". NOVA
+    contestaba con el error de Python en alto.
+
+    Un decimal entre 0 y 1 es una fracción y vale por su tanto por
+    ciento: 0.5 son 50. Un entero es ya el porcentaje. La diferencia
+    entre "1" (uno por ciento) y "1.0" (todo) sale de si trae coma, que
+    es la única pista que hay.
+    """
+    if valor is None:
+        return None
+    texto = str(valor).strip().replace("%", "").replace(",", ".")
+    try:
+        numero = float(texto)
+    except ValueError:
+        return None
+    if 0 < numero <= 1 and "." in texto:
+        numero *= 100
+    return max(0, min(100, round(numero)))
+
+
 def volumen_general(level: int) -> ToolResult:
     """Sube o baja el volumen maestro de Windows."""
-    nivel = max(0, min(100, int(level)))
+    nivel = _a_porcentaje(level)
+    if nivel is None:
+        return ToolResult(ok=False, message="¿A qué volumen lo pongo, del cero al cien?")
     try:
         from comtypes import CLSCTX_ALL
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -147,7 +174,9 @@ def volumen_general(level: int) -> ToolResult:
 
 def volumen_app(name: str, level: int) -> ToolResult:
     """Cambia el volumen de UNA aplicación, sin tocar las demás."""
-    nivel = max(0, min(100, int(level)))
+    nivel = _a_porcentaje(level)
+    if nivel is None:
+        return ToolResult(ok=False, message=f"¿A qué volumen pongo {name}, del cero al cien?")
     try:
         sesion, sesiones = _buscar_sesion(name)
     except Exception as exc:  # noqa: BLE001
@@ -262,4 +291,5 @@ def register(reg) -> None:  # noqa: ANN001
         description="Qué apps suenan ahora y a qué volumen",
         handler=que_suena,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))

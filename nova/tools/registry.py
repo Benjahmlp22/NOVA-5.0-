@@ -43,6 +43,23 @@ class Tool:
     # Herramientas útiles para el usuario pero que ensucian el catálogo
     # del modelo pueden registrarse sin ofrecerse al LLM.
     expose_to_llm: bool = True
+    # Su resultado YA es la respuesta completa para el usuario, y no
+    # hace falta que el modelo lo reescriba.
+    #
+    # Sale de verlo fallar: preguntándole "cuál es el archivo más grande
+    # de descargas", NOVA llamaba bien a la herramienta, recibía "Lo que
+    # más ocupa: setup.exe, 1.8 gigas..." y contestaba "si quieres que te
+    # diga qué ocupa más, dímelo". Tenía la respuesta delante y no la
+    # daba.
+    #
+    # El prompt ya se lo pide ("repítela tal cual") y no basta, así que
+    # va por código, como el relleno y los permisos. De paso se ahorra
+    # una vuelta entera al modelo.
+    #
+    # Sólo para las que informan. `web.search` o `pantalla.leer`
+    # devuelven material EN BRUTO que el modelo tiene que resumir: ésas
+    # no lo son.
+    responde_sola: bool = False
     # Cómo se le cuenta al usuario lo que va a pasar, si la frase
     # genérica no basta. "¿Confirmas que quiero ordenar descargas?" no
     # avisa de nada; "mover 611 archivos" sí. Recibe los argumentos y

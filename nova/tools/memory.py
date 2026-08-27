@@ -155,6 +155,7 @@ def register(reg) -> None:  # noqa: ANN001
             "properties": {"query": {"type": "string"}},
         },
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="memory.forget",

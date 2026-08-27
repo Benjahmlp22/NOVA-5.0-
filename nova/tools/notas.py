@@ -112,4 +112,5 @@ def register(reg) -> None:  # noqa: ANN001
         handler=leer_notas,
         schema={"type": "object", "properties": {"dia": {"type": "string"}}},
         risk=Risk.SAFE,
+        responde_sola=True,
     ))

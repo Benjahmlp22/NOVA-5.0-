@@ -271,6 +271,7 @@ def register(reg) -> None:  # noqa: ANN001
         description="Qué recordatorios y alarmas tiene apuntados",
         handler=listar,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="recordatorio.olvidar",

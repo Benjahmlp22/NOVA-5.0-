@@ -159,6 +159,7 @@ def register(reg) -> None:  # noqa: ANN001
             "required": ["query"],
         },
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="archivo.abrir",

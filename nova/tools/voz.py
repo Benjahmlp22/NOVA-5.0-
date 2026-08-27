@@ -210,4 +210,5 @@ def register(reg) -> None:  # noqa: ANN001
         description="Qué voces tiene disponibles para hablar",
         handler=listar,
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
