@@ -43,6 +43,11 @@ class Tool:
     # Herramientas útiles para el usuario pero que ensucian el catálogo
     # del modelo pueden registrarse sin ofrecerse al LLM.
     expose_to_llm: bool = True
+    # Cómo se le cuenta al usuario lo que va a pasar, si la frase
+    # genérica no basta. "¿Confirmas que quiero ordenar descargas?" no
+    # avisa de nada; "mover 611 archivos" sí. Recibe los argumentos y
+    # devuelve la frase.
+    resumir: Callable[[dict[str, Any]], str] | None = None
 
     @property
     def llm_name(self) -> str:
@@ -155,6 +160,13 @@ class ToolRegistry:
 
 def _summarize(tool: Tool, args: dict[str, Any]) -> str:
     """Frase corta de lo que se va a hacer, para pedir permiso."""
+    if tool.resumir is not None:
+        try:
+            propia = tool.resumir(args)
+            if propia:
+                return propia
+        except Exception:  # noqa: BLE001
+            log.debug("el resumen propio de %s falló", tool.name, exc_info=True)
     target = args.get("name") or args.get("path") or args.get("command") or ""
     if target:
         return f"{tool.description.split('.')[0].lower()}: {target}"

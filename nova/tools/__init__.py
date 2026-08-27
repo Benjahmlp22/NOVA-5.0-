@@ -10,6 +10,7 @@ from . import (
     files,
     memory,
     notas,
+    organizar,
     portapapeles,
     recordatorios,
     system,
@@ -41,6 +42,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     portapapeles.register(reg)
     buscar_archivos.register(reg)
     voz.register(reg)
+    organizar.register(reg)
     return reg
 
 
