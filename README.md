@@ -109,10 +109,14 @@ conexión · capturas de pantalla · volumen del sistema y **de una app
 concreta**.
 
 **Tus cosas.** Buscar y abrir archivos en Escritorio, Descargas,
-Documentos e Imágenes · crear, leer y borrar en su carpeta de trabajo ·
+Documentos e Imágenes · **ordenar Descargas y el Escritorio** por tipo
+(y deshacerlo) · crear, leer y borrar en su carpeta de trabajo ·
 **apuntar lo que le dictes** · leer y resumir **lo que tengas copiado** ·
 recordar cosas de ti entre sesiones · recordatorios, alarmas y
 temporizadores.
+
+**Ver.** Leer el **texto que hay en pantalla** cuando no se puede copiar
+· buscar una imagen tuya **por lo que se ve en ella**, no por su nombre.
 
 **Ella misma.** Cambiarse la voz y la velocidad si se lo pides.
 
@@ -325,6 +329,62 @@ corta a mitad de frase, porque una coma ya da 0.4 s de pausa.
 herramienta, no el modelo: buscar en internet son 2 s de red que no se
 pueden acelerar desde aquí.
 
+## Ver: la pantalla y tus imágenes
+
+Dos cosas distintas que no se hacen igual.
+
+**Leer texto en pantalla** usa el OCR que ya trae Windows (WinRT). No
+hay nada que descargar y son 0.18 s por lectura a 1920x1080. Sirve para
+lo que NO se puede copiar: un error en un diálogo, el menú de un juego,
+un PDF escaneado. Si el texto sí se puede copiar, `portapapeles.leer` es
+mejor y más barato.
+
+Por defecto lee sólo la **ventana de delante**. La pantalla entera trae
+la barra de tareas, el navegador de detrás y los nombres de tus
+carpetas, y el modelo se pierde entre todo eso.
+
+**Buscar una imagen por lo que se ve** es otro problema. «Búscame
+aquella imagen de League of Legends» tiene que funcionar aunque el
+archivo se llame `descarga (7).png`, que es como se llaman de verdad.
+
+Aquí hay 16.699 imágenes. El cálculo decide la arquitectura solo:
+
+| cómo | por imagen | las 16.699 |
+|---|---|---|
+| un modelo de visión describiendo cada una | 1 – 3 s | **5 a 14 horas** |
+| CLIP (vectores comparables) | 47 ms | **13 minutos** |
+
+Así que CLIP, con `onnxruntime` en CPU — que ya estaba instalado, y no
+hace falta torch (2.5 GB) para *ejecutar* un modelo ya entrenado. Los
+dos codificadores son 607 MB que se bajan una vez de un repositorio
+público; después esto no toca la red nunca más.
+
+Detalles que salieron de medir:
+
+**Los hilos de onnxruntime.** Su «auto» se queda a menos de la mitad de
+lo que da la máquina:
+
+| hilos | lote | por imagen |
+|---|---|---|
+| auto | 8 | 72 ms |
+| auto | 32 | 80 ms |
+| 6 | 32 | 61 ms |
+| **12** | **32** | **31 ms** |
+
+**Se indexa en segundo plano** y NOVA te sigue atendiendo. La segunda
+vez sólo mira lo nuevo: 0.1 s si no ha cambiado nada.
+
+**El escritorio no entra por defecto.** Aquí tiene 10.288 imágenes que
+son recursos de proyectos: dos tercios del tiempo a cambio de ruido.
+
+**Hay un umbral.** Sin él CLIP siempre devuelve algo — lo menos malo.
+Enseñar tres imágenes al azar con cara de acierto es peor que decir que
+no la tienes.
+
+**La descripción va en inglés.** CLIP se entrenó así y en español
+acierta bastante menos. No hay que traducir nada a mano: el modelo que
+decide llamar a la herramienta ya lo hace al rellenar el argumento.
+
 ## Las voces
 
 Windows tiene **dos juegos de voces y no son el mismo**. `pyttsx3` ve
@@ -520,6 +580,11 @@ nova/
     awareness.py    hora, app activa, batería, clima
     polish.py       limpieza de tics y longitud de la voz
   llm/ollama.py     cliente del modelo local
+  winrt.py          puente a PowerShell para lo que sólo da WinRT
+  vista/
+    ocr.py          leer el texto de la pantalla (OCR de Windows)
+    clip.py         imágenes y frases como vectores comparables
+    album.py        el índice de tus imágenes
   voice/
     listener.py     wake word y captura (Vosk)
     speaker.py      voz, con interrupción
@@ -528,7 +593,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              355 tests, sin red ni micrófono
+tests/              413 tests, sin red ni micrófono
 ```
 
 ## Tests

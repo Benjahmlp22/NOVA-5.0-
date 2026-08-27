@@ -8,6 +8,7 @@ from . import (
     audio,
     buscar_archivos,
     files,
+    imagenes,
     memory,
     notas,
     organizar,
@@ -45,6 +46,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     voz.register(reg)
     organizar.register(reg)
     pantalla.register(reg)
+    imagenes.register(reg)
     return reg
 
 

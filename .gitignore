@@ -22,3 +22,7 @@ bench/audio/
 # Muestras de voz generadas para comparar sintetizadores. Se regeneran
 # con bench/muestras_voz.py; son megas de WAV que no aportan al repo.
 muestras_voz/
+
+# Modelos de CLIP para buscar imagenes por su contenido (607 MB).
+# Se bajan con bench/descargar_clip.py.
+models/clip/

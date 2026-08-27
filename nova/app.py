@@ -48,6 +48,7 @@ from .tools import (
     PendingConfirmation,
     apps,
     build_registry,
+    imagenes,
     memory,
     pantalla,
     recordatorios,
@@ -513,6 +514,7 @@ class Nova(QObject):
         self.listener.stop()
         self.speaker.stop()
         pantalla.cerrar()
+        imagenes.cerrar()
         self.awareness.stop()
         self._hilo.quit()
         self._hilo.wait(1500)

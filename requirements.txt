@@ -33,6 +33,18 @@ ddgs>=9.0
 pycaw>=20240210
 comtypes>=1.2
 
+# ── Ver: buscar imágenes por lo que se ve en ellas ───────────────────
+# CLIP corriendo en onnxruntime, en CPU. Nada de torch: son 2.5 GB para
+# EJECUTAR un modelo que ya está entrenado, y onnxruntime hace eso en
+# 31 ms por imagen (medido, con los hilos puestos a mano).
+#
+# Los 607 MB de los dos codificadores se bajan aparte y una sola vez con
+# bench/descargar_clip.py. Después esto no toca la red nunca más.
+#
+# El OCR de la pantalla no necesita nada: lo trae Windows.
+onnxruntime>=1.17
+pillow>=10.0
+
 # Desarrollo
 pytest>=8.0
 ruff>=0.6
