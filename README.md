@@ -100,11 +100,23 @@ la batería y el tiempo que hace, sin que se lo preguntes.
 
 ## Qué puede hacer
 
-Abrir y cerrar aplicaciones · buscar si algo está instalado · estado del
-PC y especificaciones · qué tienes en primer plano · IP y conexión ·
-capturas de pantalla · crear, leer y borrar archivos en su carpeta de
-trabajo · recordar cosas de ti entre sesiones · volumen del sistema ·
-**buscar en internet** y abrirte un enlace.
+**Programas y ventanas.** Abrir y cerrar aplicaciones · buscar si algo
+está instalado · traer al frente una ventana ya abierta · minimizarlas
+todas · cerrar la de delante.
+
+**El PC.** Estado y especificaciones · qué tienes en primer plano · IP y
+conexión · capturas de pantalla · volumen del sistema y **de una app
+concreta**.
+
+**Tus cosas.** Buscar y abrir archivos en Escritorio, Descargas,
+Documentos e Imágenes · crear, leer y borrar en su carpeta de trabajo ·
+**apuntar lo que le dictes** · leer y resumir **lo que tengas copiado** ·
+recordar cosas de ti entre sesiones · recordatorios, alarmas y
+temporizadores.
+
+**Ella misma.** Cambiarse la voz y la velocidad si se lo pides.
+
+**Internet.** Buscar sin API keys y abrirte un enlace.
 
 ## Configuración
 
@@ -112,10 +124,15 @@ Todo en `.env` (copia `.env.example`). Lo que más se toca:
 
 ```ini
 NOVA_MODEL=qwen3.5:4b
-NOVA_KEEP_ALIVE=24h       # el modelo se queda en VRAM, no se recarga
+NOVA_MODEL_LIGERO=qwen2.5:3b  # al que se cambia si un juego llena la VRAM
+NOVA_KEEP_ALIVE=24h           # el modelo se queda en VRAM, no se recarga
 NOVA_CONFIRM=solo_peligroso
+NOVA_ESPERA_RESPUESTA=60      # aguanta despierta si ha preguntado algo
 NOVA_TTS=true
 ```
+
+La voz elegida no va aquí: se cambia hablando y se guarda sola en
+`data/voz.json`.
 
 ## Reconocimiento de voz: qué se eligió y con qué números
 
@@ -246,6 +263,13 @@ dijera.
 **"Cállate" la calla.** Junto con "duérmete", "dormite", "silencio",
 "para ya" y "déjame". Que no hiciera caso justo a eso era lo peor.
 
+**Pero si ha preguntado ELLA, espera.** Los 20 s no cuentan mientras
+haya una respuesta pendiente: pedía permiso, te parabas a pensarlo, se
+dormía, y el "sí" llegaba a una NOVA que ya no sabía de qué le hablaban.
+Contestar a una pregunta que te acaba de hacer no puede exigir volver a
+nombrarla. Con tope de un minuto (`NOVA_ESPERA_RESPUESTA`): una pregunta
+sin contestar tampoco puede dejar el micro abierto para siempre.
+
 Y se la puede **cortar hablando por encima**. Mientras habla el micro no
 se procesa pero sí se vigila, con dos condiciones a la vez: el micro 2.5×
 por encima del umbral de voz, y NOVA en una pausa de la suya — si suena
@@ -264,19 +288,32 @@ bueno.** Medido con todo montado:
 | detectar que has terminado (silencio) | 0.70 s | 0.70 s |
 | etapa 2: Whisper `medium` en la 3060 | 0.50 s | 0.50 s |
 | cerebro hasta la PRIMERA frase | 1.11 – 2.66 s | **0.16 – 3.33 s** |
-| sintetizar la voz y empezar a sonar | 1.40 s | **0.67 s** |
-| **total** | ≈ 3 – 5.6 s | **≈ 2.0 – 5.2 s** |
+| sintetizar la voz y empezar a sonar | 1.40 s | **0.54 s** |
+| **total** | ≈ 3 – 5.6 s | **≈ 1.9 – 5.1 s** |
 
-Dos cambios se comieron la diferencia:
+Tres cambios se comieron la diferencia:
 
 **Hablar mientras el modelo escribe.** Ollama va en streaming y las
 frases se dicen según se cierran, sin esperar al punto final. En una
 respuesta directa la primera frase está lista en 0.16 s donde antes la
 respuesta entera tardaba 1.11 s.
 
-**Pedirle el audio a SAPI en vez de dejarle hablar.** Sintetizar va ~9×
-más rápido que el tiempo real, así que la primera sílaba baja de 1.40 s a
-0.67 s. Ver la sección del panel.
+**Pedirle el audio a Windows en vez de dejarle hablar.** Sintetizar va
+~9× más rápido que el tiempo real, así que la primera sílaba baja de
+1.40 s a 0.67 s. Ver la sección del panel.
+
+**Y las voces OneCore, que además de sonar mejor van 13× más rápido.**
+Medido por el camino real de NOVA, la misma frase:
+
+| sintetizador | por frase |
+|---|---|
+| SAPI, motor nuevo cada vez | 142 ms |
+| OneCore, proceso vivo | **11 ms** |
+
+SAPI pagaba construir un motor entero por frase, que es el precio de
+esquivar el reciclado roto de `pyttsx3`. Como NOVA habla frase a frase
+mientras el modelo escribe, esos 130 ms se ahorraban en cada una. Ver
+«Las voces».
 
 Lo que queda, y por qué no está hecho:
 
@@ -287,6 +324,53 @@ corta a mitad de frase, porque una coma ya da 0.4 s de pausa.
 **Las órdenes con herramienta (hasta 3.3 s).** Ahí el suelo lo pone la
 herramienta, no el modelo: buscar en internet son 2 s de red que no se
 pueden acelerar desde aquí.
+
+## Las voces
+
+Windows tiene **dos juegos de voces y no son el mismo**. `pyttsx3` ve
+SAPI5, que en español son dos y las dos de mujer (Helena y Sabina
+«Desktop», de la época de Windows 7). OneCore tiene cinco:
+
+| voz | | |
+|---|---|---|
+| Pablo | hombre | España |
+| Laura | mujer | España |
+| Helena | mujer | España |
+| Sabina | mujer | México |
+| Raul | hombre | México |
+
+A OneCore sólo se llega por WinRT. Desde Python haría falta instalar
+`winsdk`; desde PowerShell ya está en el sistema, así que no se instala
+nada.
+
+Lo que hacía inviable la idea era el arranque: `powershell.exe` cuesta
+**179 ms medidos**, y NOVA sintetiza frase a frase mientras el modelo
+escribe. Un proceso por frase se habría cargado el trabajo de que
+empiece a hablar pronto. Con el proceso **vivo** leyendo de stdin, el
+arranque se paga una vez (0.43 s) y cada frase sale por 11 ms.
+
+El texto le llega en base64. No es adorno: por stdin los acentos se
+corrompen según la página de códigos de la consola, y «cañón» llegaba
+convertido en otra cosa.
+
+Si algo falla —no hay PowerShell, WinRT no responde, el proceso se
+muere— NOVA sigue con SAPI. Mejor metálica que muda.
+
+Por defecto sigue siendo **Helena**, la misma de antes. Windows lista a
+Pablo primero, y heredar de ahí le habría cambiado el sexo a la voz de
+NOVA sin que nadie lo pidiera.
+
+Para cambiarla no hay que saberse los nombres: *«ponte voz de hombre»*,
+*«con acento mexicano»*, *«habla más despacio»*. Si ninguna encaja lo
+dice, en vez de cambiar a una al azar.
+
+Cuál suena mejor no lo decide ninguna medida, lo decide el oído:
+
+```
+.venv\Scripts\python.exe bench\muestras_voz.py
+```
+
+deja en `muestras_voz/` la misma frase con las seis, la vieja incluida.
 
 ## Presupuesto de recursos
 
@@ -354,6 +438,15 @@ igual. Un filtro determinista sí lo garantiza (`nova/core/polish.py`).
 **Los permisos los decide el registro, no el modelo.** Borrar, cerrar
 procesos o subir el volumen pasan por confirmación según la política;
 que el LLM "decida" saltársela no es una opción que exista en el código.
+
+Lo que sí se corrigió: **pedir permiso para una cosa ya no cancela las
+demás**. «Olvida lo anterior sobre mí y recuerda que soy Messi» son dos
+acciones y sólo una pide permiso; la que pedía abortaba la ronda entera
+y lo de Messi no se guardaba nunca, sin avisar. Ahora se ejecuta todo lo
+que no necesita permiso, lo demás se encola, y la pregunta va al final
+contando antes lo hecho. Un «no» tumba sólo esa acción. Y si contestas
+otra cosa, tu frase **se atiende** en vez de tirarse a la basura con un
+«vale, lo dejo».
 
 **Conversación continua.** Tras responder sigue escuchando. Solo una
 despedida explícita o el timeout de silencio la duermen.
@@ -429,11 +522,13 @@ nova/
   llm/ollama.py     cliente del modelo local
   voice/
     listener.py     wake word y captura (Vosk)
-    speaker.py      voz (SAPI5) con interrupción
+    speaker.py      voz, con interrupción
+    onecore.py      las voces buenas de Windows (WinRT vía PowerShell)
+    onecore.ps1     el proceso que se queda vivo sintetizando
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
-  ui/               orbe, borde azul
-tests/              261 tests, sin red ni micrófono
+  ui/               orbe, borde de pantalla
+tests/              355 tests, sin red ni micrófono
 ```
 
 ## Tests
