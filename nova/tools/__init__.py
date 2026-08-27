@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from ..config import CONFIG
-from . import apps, audio, files, memory, recordatorios, system, web
+from . import (
+    apps,
+    audio,
+    buscar_archivos,
+    files,
+    memory,
+    notas,
+    portapapeles,
+    recordatorios,
+    system,
+    ventanas,
+    voz,
+    web,
+)
 from .registry import (
     PendingConfirmation,
     Risk,
@@ -23,6 +36,11 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     audio.register(reg)
     recordatorios.register(reg)
     web.register(reg)
+    ventanas.register(reg)
+    notas.register(reg)
+    portapapeles.register(reg)
+    buscar_archivos.register(reg)
+    voz.register(reg)
     return reg
 
 
