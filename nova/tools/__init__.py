@@ -7,6 +7,7 @@ from . import (
     apps,
     audio,
     buscar_archivos,
+    carpetas,
     files,
     imagenes,
     memory,
@@ -47,6 +48,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     organizar.register(reg)
     pantalla.register(reg)
     imagenes.register(reg)
+    carpetas.register(reg)
     return reg
 
 

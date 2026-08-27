@@ -176,10 +176,15 @@ def revisar(carpeta: str = "descargas") -> ToolResult:
         return ToolResult(ok=True, message=f"{raiz.name} ya está ordenada.")
     quedan = sueltos - len(movimientos)
     cola = f" Otros {quedan} se quedan donde están." if quedan else ""
+    # "Todavía no he movido nada" delante y en primera persona, porque
+    # el modelo leía "puedo mover 611 archivos" y respondía "he movido
+    # los archivos de Descargas según su tipo". Decía que había hecho
+    # algo que no había hecho.
     return ToolResult(
         ok=True,
-        message=f"En {raiz.name} puedo mover {_plural(len(movimientos), 'archivo', 'archivos')}: "
-                f"{_resumen(movimientos)}.{cola}",
+        message=f"Todavía no he movido nada. Si quieres, en {raiz.name} puedo ordenar "
+                f"{_plural(len(movimientos), 'archivo', 'archivos')}: "
+                f"{_resumen(movimientos)}.{cola} Dime si lo hago.",
         data={"cuantos": len(movimientos)},
     )
 
@@ -266,6 +271,7 @@ def register(reg) -> None:  # noqa: ANN001
         handler=revisar,
         schema={"type": "object", "properties": {"carpeta": {"type": "string"}}},
         risk=Risk.SAFE,
+        responde_sola=True,
     ))
     reg.register(Tool(
         name="organizar.hacerlo",
