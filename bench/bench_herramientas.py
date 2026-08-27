@@ -98,7 +98,12 @@ def probar(llm: OllamaClient, reg, prompt: str) -> tuple[int, int, float, list]:
 
         agente = Agent(llm, reg, on_status=apuntar)
         r = agente.run(prompt, [], frase)
-        llamadas = intentadas + [p.tool for p in r.pendientes]
+        #  incluye lo que resolvió el atajo determinista de
+        # "recuerda que..." (memory.remember), que responde SIN pasar
+        # por on_status a propósito: es barato y no merece jugárselo a
+        # que el modelo acierte. Sin esto, el banco lo marcaba como
+        # "nada" aunque NOVA sí lo hubiera hecho.
+        llamadas = intentadas + list(r.tools_used) + [p.tool for p in r.pendientes]
         if esperada is None:
             if llamadas:
                 falsos += 1

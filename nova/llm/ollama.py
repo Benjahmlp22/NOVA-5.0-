@@ -46,6 +46,7 @@ class OllamaClient:
         keep_alive: str = "30m",
         temperature: float = 0.6,
         max_tokens: int = 350,
+        num_ctx: int = 8192,
         timeout: float = 120.0,
     ) -> None:
         self.url = url.rstrip("/")
@@ -53,6 +54,7 @@ class OllamaClient:
         self.keep_alive = keep_alive
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.num_ctx = num_ctx
         # Un cliente reutilizado mantiene viva la conexión TCP; abrir
         # una nueva por mensaje añade handshake a cada respuesta.
         self._http = httpx.Client(timeout=timeout)
@@ -166,6 +168,7 @@ class OllamaClient:
             "options": {
                 "temperature": self.temperature,
                 "num_predict": self.max_tokens,
+                "num_ctx": self.num_ctx,
             },
         }
         if tools:
@@ -213,7 +216,11 @@ class OllamaClient:
             "stream": True,
             "keep_alive": self.keep_alive,
             "think": False,
-            "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+                "num_ctx": self.num_ctx,
+            },
         }
         if tools:
             payload["tools"] = tools

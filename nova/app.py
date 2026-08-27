@@ -184,6 +184,7 @@ class Nova(QObject):
             keep_alive=CONFIG.keep_alive,
             temperature=CONFIG.temperature,
             max_tokens=CONFIG.max_tokens,
+            num_ctx=CONFIG.num_ctx,
             timeout=CONFIG.request_timeout,
         )
         self.tools = build_registry(CONFIG.confirm_policy)

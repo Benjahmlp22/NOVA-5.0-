@@ -130,6 +130,22 @@ class Config:
     # Tope de tokens generados: acota la latencia peor caso sin cortar
     # frases a medias (con 200 se truncaban enumeraciones a mitad).
     max_tokens: int = field(default_factory=lambda: int(_env("NOVA_MAX_TOKENS", "350")))
+    # La ventana de contexto que se le pide a Ollama.
+    #
+    # BUG DE FONDO encontrado el 27/08: nunca se había fijado. Ollama usa
+    # 2048 por defecto si nadie dice lo contrario, y un turno cualquiera
+    # con el catálogo de 52 herramientas ya pesa 2050 — por ENCIMA del
+    # límite. El modelo respondía a un prompt cortado a la mitad y el
+    # síntoma no tenía pinta de esto: "cierra Spotify" llamaba a
+    # voz_cambiar con "ponte voz de hombre", sin relación ninguna con lo
+    # pedido. Confirmado forzando num_ctx=8192 en la misma petición: ahí
+    # sí acertó (app_close, Spotify).
+    #
+    # 8192 cabe de sobra: sistema + catálogo + historial de 12 turnos +
+    # una ronda de herramientas no ha llegado a acercarse, y en VRAM
+    # cuesta 280 MB medidos (3.06 GB a 2048 contra 3.34 GB a 8192) —
+    # nada, sobra en una tarjeta de 12 GB.
+    num_ctx: int = field(default_factory=lambda: int(_env("NOVA_NUM_CTX", "8192")))
     # Rondas del bucle de herramientas antes de forzar un cierre.
     max_rounds: int = field(default_factory=lambda: int(_env("NOVA_MAX_ROUNDS", "4")))
     request_timeout: float = field(default_factory=lambda: float(_env("NOVA_TIMEOUT", "120")))
