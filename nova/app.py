@@ -84,7 +84,7 @@ def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
     return hablar and not silenciada and tts_activo
 
 
-def estado_en_reposo(*, ocupada: bool, escuchando: bool) -> str:
+def estado_en_reposo(*, ocupada: bool, escuchando: bool, sorda: bool = False) -> str:
     """Qué estado le toca al orbe cuando NOVA termina de hablar.
 
     `escuchando` NO es "despierta". Despierta sigue veinte segundos, pero
@@ -92,6 +92,10 @@ def estado_en_reposo(*, ocupada: bool, escuchando: bool) -> str:
     seguimiento. Enseñar "te escucho" en los doce segundos restantes era
     mentir: el panel decía que sí y ella te ignoraba.
     """
+    if sorda:
+        # Manda sobre todo lo demás: si has apagado el oído, el panel no
+        # puede decir "te escucho" ni un segundo.
+        return "dormida"
     if ocupada:
         return "pensando"
     return "escucha" if escuchando else "dormida"
@@ -187,7 +191,8 @@ class Nova(QObject):
         )
 
         # ── Interfaz ─────────────────────────────────────────────────
-        self.ui = Interfaz(on_quit=self.salir, on_toggle_mute=self.alternar_voz)
+        self.ui = Interfaz(on_quit=self.salir, on_toggle_mute=self.alternar_voz,
+                           on_toggle_sordo=self.alternar_oido)
         self.glow = self.ui.glow
 
         # ── Voz ──────────────────────────────────────────────────────
@@ -506,9 +511,34 @@ class Nova(QObject):
         self.app.quit()
 
     def alternar_voz(self) -> None:
+        """El botón de callarla. Sigue oyéndote y sigue haciendo cosas."""
         self._voz_silenciada = not self._voz_silenciada
         if self._voz_silenciada:
             self.speaker.shut_up()
+        self._pintar_conmutadores()
+
+    def alternar_oido(self) -> None:
+        """El botón de que no te escuche.
+
+        Ensordecer calla también, y no por comodidad: una NOVA que no te
+        oye pero te habla no puede ser interrumpida por voz. Te quedarías
+        oyéndola sin ninguna forma de pararla salvo el ratón.
+
+        Al volver a oír NO se le devuelve la voz sola: si la habías
+        callado tú antes por tu cuenta, esa decisión sigue siendo tuya.
+        """
+        sordo = not self.listener.sordo
+        self.listener.ensordecer(sordo)
+        if sordo:
+            self._voz_silenciada = True
+            self.speaker.shut_up()
+            self._pendientes = []
+            self.ui.set_estado("dormida")
+            self.glow.apagar()
+        self._pintar_conmutadores()
+
+    def _pintar_conmutadores(self) -> None:
+        self.ui.set_conmutadores(mudo=self._voz_silenciada, sordo=self.listener.sordo)
 
     # ── Eventos de voz (llegan desde el hilo de escucha) ─────────────
 
@@ -712,7 +742,9 @@ class Nova(QObject):
             self.ui.set_estado(estado)
             return
         siguiente = estado_en_reposo(
-            ocupada=self._ocupada, escuchando=self.listener.escuchando
+            ocupada=self._ocupada,
+            escuchando=self.listener.escuchando,
+            sorda=self.listener.sordo,
         )
         if siguiente == "escucha" and CONFIG.glow_enabled:
             # La conversación sigue abierta: se nota en el glow que no

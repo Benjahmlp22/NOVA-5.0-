@@ -30,10 +30,13 @@ log = logging.getLogger("nova.ui")
 class Interfaz(QObject):
     """Todo lo que NOVA enseña. La app habla con esto, no con los widgets."""
 
-    def __init__(self, *, on_quit=None, on_toggle_mute=None) -> None:  # noqa: ANN001
+    def __init__(self, *, on_quit=None, on_toggle_mute=None,  # noqa: ANN001
+                 on_toggle_sordo=None) -> None:  # noqa: ANN001
         super().__init__()
-        self.panel = Panel(on_quit=on_quit, on_toggle_mute=on_toggle_mute)
-        self.orb = Orb(on_quit=on_quit, on_toggle_mute=on_toggle_mute)
+        self.panel = Panel(on_quit=on_quit, on_toggle_mute=on_toggle_mute,
+                           on_toggle_sordo=on_toggle_sordo)
+        self.orb = Orb(on_quit=on_quit, on_toggle_mute=on_toggle_mute,
+                       on_toggle_sordo=on_toggle_sordo)
         self.glow = GlowBorder()
 
         self._colapsada = False
@@ -109,6 +112,10 @@ class Interfaz(QObject):
         tipo, texto = describir(herramienta, dato)
         self.panel.añadir_accion(tipo, texto)
         log.debug("actividad: %s", texto)
+
+    def set_conmutadores(self, *, mudo: bool, sordo: bool) -> None:
+        self.panel.set_conmutadores(mudo=mudo, sordo=sordo)
+        self.orb.set_conmutadores(mudo=mudo, sordo=sordo)
 
     def set_modo_ligero(self, activo: bool) -> None:
         """Un juego se ha quedado con la VRAM y NOVA va con el modelo pequeño."""

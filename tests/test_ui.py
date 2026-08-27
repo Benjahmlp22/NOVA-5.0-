@@ -143,14 +143,27 @@ def test_el_recorte_de_detalle_es_razonable():
 # que puede romperse aquí sólo se ve en los píxeles: que un cambio de
 # opacidad tape el juego, o que quede una costura entre tramos.
 
-def _pintar_borde(ancho: int = 1920, alto: int = 1080):
+# La QApplication tiene que vivir en el módulo. Guardada sólo en una
+# variable local, al salir de la función Python la recolecta, Qt destruye
+# la aplicación entera y cualquier widget creado antes se queda con el
+# objeto C++ borrado debajo ("wrapped C/C++ object has been deleted").
+_APP = None
+
+
+def _aplicacion():
+    global _APP
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PyQt5.QtWidgets")
+    if _APP is None:
+        _APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    return _APP
+
+
+def _pintar_borde(ancho: int = 1920, alto: int = 1080):
     from PyQt5.QtGui import QImage
 
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    assert app is not None
+    _aplicacion()
     from nova.ui.glow import GlowBorder
 
     borde = GlowBorder()
@@ -202,3 +215,90 @@ def test_no_quedan_costuras_entre_tramos():
     fila = [_alfa(img, x, 0) for x in range(1920)]
     saltos = [abs(fila[i + 1] - fila[i]) for i in range(len(fila) - 1)]
     assert max(saltos) <= 6
+
+
+# ── Los botones de callarla y de que no te oiga ──────────────────────
+#
+# Lo que se rompe siempre en una cabecera con botones es que lo pintado
+# y lo clicable dejen de coincidir. Aquí salen los dos del mismo sitio
+# (`rect_boton`), y esto lo comprueba.
+
+def _panel():
+    _aplicacion()
+    from nova.ui.panel import Panel
+
+    pulsados: list[str] = []
+    pnl = Panel(on_toggle_mute=lambda: pulsados.append("mudo"),
+                on_toggle_sordo=lambda: pulsados.append("sordo"))
+    pnl.minimizar.connect(lambda: pulsados.append("minimizar"))
+    pnl.set_estado("escucha")
+    return pnl, pulsados
+
+
+def _clic(pnl, punto):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QMouseEvent
+    pnl.mousePressEvent(QMouseEvent(
+        QMouseEvent.MouseButtonPress, punto, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+
+def test_cada_boton_responde_donde_se_dibuja():
+    from nova.ui.panel import BOTONES
+    pnl, pulsados = _panel()
+    for nombre in BOTONES:
+        _clic(pnl, pnl.rect_boton(nombre).center())
+    assert pulsados == list(BOTONES)
+
+
+def test_los_botones_no_se_pisan_entre_ellos():
+    from nova.ui.panel import BOTONES
+    pnl, _ = _panel()
+    cajas = [pnl.rect_boton(n) for n in BOTONES]
+    for i, a in enumerate(cajas):
+        for b in cajas[i + 1:]:
+            assert not a.intersects(b)
+
+
+def test_el_punto_de_aviso_no_cae_encima_de_un_boton():
+    """Puesto a mano caía justo sobre el icono del micrófono: por eso su
+    posición se calcula desde los botones y no con un número suelto."""
+    from nova.ui.panel import _X_AVISO, BOTONES
+    pnl, _ = _panel()
+    for nombre in BOTONES:
+        caja = pnl.rect_boton(nombre)
+        assert not (caja.left() <= _X_AVISO + 9 and caja.right() >= _X_AVISO)
+
+
+def test_arrastrar_el_panel_sigue_funcionando_fuera_de_los_botones():
+    from PyQt5.QtCore import QPoint
+    pnl, pulsados = _panel()
+    _clic(pnl, QPoint(60, 20))
+    assert pulsados == []
+    assert pnl._arrastre is not None
+
+
+def _pixeles_ambar(pnl, boton: str) -> int:
+    """Cuántos píxeles del icono son ámbar. El ámbar es la señal de
+    «esto está apagado»; el gris normal tiene los tres canales iguales."""
+    from PyQt5.QtGui import QColor, QImage
+
+    from nova.ui.panel import ANCHO
+    img = QImage(ANCHO, 116, QImage.Format_ARGB32)
+    img.fill(0)
+    pnl.render(img)
+    caja = pnl.rect_boton(boton)
+    return sum(
+        1
+        for x in range(caja.left(), caja.right())
+        for y in range(caja.top(), caja.bottom())
+        if (lambda c: c.red() - c.blue() > 60)(QColor(img.pixel(x, y)))
+    )
+
+
+@pytest.mark.parametrize("boton,mudo,sordo", [("mudo", True, False), ("sordo", False, True)])
+def test_apagado_se_ve_de_un_vistazo(boton, mudo, sordo):
+    pnl, _ = _panel()
+    pnl.set_conmutadores(mudo=False, sordo=False)
+    assert _pixeles_ambar(pnl, boton) == 0
+    pnl.set_conmutadores(mudo=mudo, sordo=sordo)
+    assert _pixeles_ambar(pnl, boton) > 20

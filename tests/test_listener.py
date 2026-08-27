@@ -420,3 +420,34 @@ def test_dormirse_a_la_fuerza_cancela_la_espera():
     oyente.sleep_now("adios")
     assert oyente._esperando_algo() is False
     assert ("dormir", "adios") in eventos
+
+
+# ── Ensordecer: que no te escuche hasta que tú digas ─────────────────
+
+def test_ensordecer_la_duerme_y_lo_avisa():
+    oyente, eventos = _oyente()
+    oyente._awake = True
+    oyente.ensordecer(True)
+    assert oyente.sordo
+    assert ("dormir", "sordo") in eventos
+
+
+def test_volver_a_oir_no_la_despierta_sola():
+    """Devolverle el oído no es lo mismo que llamarla: sigue haciendo
+    falta decir su nombre."""
+    oyente, _ = _oyente()
+    oyente.ensordecer(True)
+    oyente.ensordecer(False)
+    assert not oyente.sordo
+    assert not oyente.awake
+
+
+def test_sorda_no_es_lo_mismo_que_muda_por_estar_hablando():
+    """`_muted` lo pone ella mientras habla y dura un instante; `sordo`
+    lo pones tú y dura hasta que lo quites."""
+    oyente, _ = _oyente()
+    oyente.mute()
+    assert not oyente.sordo
+    oyente.unmute()
+    oyente.ensordecer(True)
+    assert oyente.sordo

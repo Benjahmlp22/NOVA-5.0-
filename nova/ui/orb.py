@@ -43,7 +43,8 @@ _VELOCIDAD = {
 class Orb(QWidget):
     expandir = pyqtSignal()
 
-    def __init__(self, on_quit=None, on_toggle_mute=None) -> None:  # noqa: ANN001
+    def __init__(self, on_quit=None, on_toggle_mute=None,  # noqa: ANN001
+                 on_toggle_sordo=None) -> None:  # noqa: ANN001
         super().__init__()
         self._estado = "apagada"
         self._fase = 0.0
@@ -52,6 +53,9 @@ class Orb(QWidget):
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
+        self._on_toggle_sordo = on_toggle_sordo
+        self._voz_silenciada = False
+        self._sordo = False
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -72,6 +76,13 @@ class Orb(QWidget):
     def set_estado(self, estado: str) -> None:
         if estado != self._estado:
             self._estado = estado
+            self.update()
+
+    def set_conmutadores(self, *, mudo: bool, sordo: bool) -> None:
+        """Minimizada al orbe también hay que poder ver que está sorda:
+        si no, parece que se ha roto."""
+        if (mudo, sordo) != (self._voz_silenciada, self._sordo):
+            self._voz_silenciada, self._sordo = mudo, sordo
             self.update()
 
     def set_pendientes(self, cuantos: int) -> None:
@@ -156,8 +167,30 @@ class Orb(QWidget):
             p.drawRoundedRect(int(x), int(centro - alto / 2), ancho, int(alto), 2, 2)
 
         self._pintar_aviso(p)
+        self._pintar_apagados(p)
 
     # ── Interacción ──────────────────────────────────────────────────
+
+    def _pintar_apagados(self, p: QPainter) -> None:
+        """Una raya sobre el orbe si está muda o sorda.
+
+        Minimizada al orbe no hay etiquetas ni botones, así que sin esto
+        una NOVA sorda parece exactamente una NOVA rota: enseña que está
+        despierta y no reacciona a nada.
+        """
+        if not (self._voz_silenciada or self._sordo):
+            return
+        centro = TAMANO / 2
+        radio = centro - 5
+        d = radio * 0.62
+        p.setBrush(Qt.NoBrush)
+        # Dos rayas si está las dos cosas; una sola no distinguiría
+        # "no te oigo" de "no te hablo".
+        p.setPen(QPen(_AVISO, 2.2))
+        if self._sordo:
+            p.drawLine(int(centro - d), int(centro + d), int(centro + d), int(centro - d))
+        if self._voz_silenciada:
+            p.drawLine(int(centro - d), int(centro - d), int(centro + d), int(centro + d))
 
     def _pintar_aviso(self, p: QPainter) -> None:
         if not self._pendientes:
@@ -198,7 +231,13 @@ class Orb(QWidget):
             "QMenu::item:selected{background:#26262b}"
         )
         if self._on_toggle_mute:
-            menu.addAction("Silenciar / reactivar voz", self._on_toggle_mute)
+            menu.addAction(
+                "Dejar de hablar" if not self._voz_silenciada else "Volver a hablar",
+                self._on_toggle_mute)
+        if self._on_toggle_sordo:
+            menu.addAction(
+                "Dejar de escuchar" if not self._sordo else "Volver a escuchar",
+                self._on_toggle_sordo)
         menu.addSeparator()
         menu.addAction("Salir de NOVA", self._on_quit or (lambda: None))
         menu.exec_(e.globalPos())

@@ -318,3 +318,16 @@ def test_dormirse_sin_nada_pendiente_no_hace_nada_raro():
     n = _NovaDormida([])
     n._al_dormir("silencio")
     assert n._pendientes == []
+
+
+# ── Sorda manda sobre lo que enseña el panel ─────────────────────────
+
+def test_sorda_nunca_dice_te_escucho():
+    """Aunque la ventana de seguimiento siga abierta: si has apagado el
+    oído, el panel no puede decir «te escucho» ni un segundo."""
+    assert estado_en_reposo(ocupada=False, escuchando=True, sorda=True) == "dormida"
+    assert estado_en_reposo(ocupada=True, escuchando=True, sorda=True) == "dormida"
+
+
+def test_sin_estar_sorda_todo_sigue_igual():
+    assert estado_en_reposo(ocupada=False, escuchando=True, sorda=False) == "escucha"

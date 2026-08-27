@@ -58,6 +58,17 @@ MUESTRAS_ONDA = 72
 
 ACCIONES_VISIBLES = 4
 
+# Los botones de la cabecera, de derecha a izquierda. Un solo sitio para
+# saber dónde están: lo pintado y lo clicable salen de aquí, que es
+# donde estas cosas siempre acaban descuadradas.
+BOTON = 20                 # lado del área sensible al clic
+BOTONES = ("minimizar", "sordo", "mudo")
+_PASO_BOTON = 26           # separación entre centros
+
+# El punto de aviso va a la IZQUIERDA de todos los botones, y se calcula
+# desde ellos. Puesto a mano caía justo encima del icono del micrófono.
+_X_AVISO = ANCHO - 24 - len(BOTONES) * _PASO_BOTON - 4
+
 # Cuánto se queda una acción ya terminada antes de irse sola.
 SEGUNDOS_ACCION_VISIBLE = 3.0
 
@@ -114,7 +125,8 @@ class Panel(QWidget):
 
     minimizar = pyqtSignal()
 
-    def __init__(self, on_quit=None, on_toggle_mute=None) -> None:  # noqa: ANN001
+    def __init__(self, on_quit=None, on_toggle_mute=None,  # noqa: ANN001
+                 on_toggle_sordo=None) -> None:  # noqa: ANN001
         super().__init__()
         self._estado = "preparando"
         self._niveles: deque[float] = deque([0.0] * MUESTRAS_ONDA, maxlen=MUESTRAS_ONDA)
@@ -130,9 +142,14 @@ class Panel(QWidget):
         # Un juego se ha llevado la VRAM y va con el modelo pequeño.
         # Decirlo evita el '¿por qué va lenta hoy?'.
         self._modo_ligero = False
+        # Lo que el usuario ha apagado a mano. El panel no decide: se lo
+        # cuenta la app, que es quien manda sobre el altavoz y el oído.
+        self._voz_silenciada = False
+        self._sordo = False
         self._arrastre: QPoint | None = None
         self._on_quit = on_quit
         self._on_toggle_mute = on_toggle_mute
+        self._on_toggle_sordo = on_toggle_sordo
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -174,6 +191,12 @@ class Panel(QWidget):
         self._respondido = texto or ""
         self._ajustar_alto()
         self.update()
+
+    def set_conmutadores(self, *, mudo: bool, sordo: bool) -> None:
+        """Cómo están el altavoz y el oído ahora mismo."""
+        if (mudo, sordo) != (self._voz_silenciada, self._sordo):
+            self._voz_silenciada, self._sordo = mudo, sordo
+            self.update()
 
     def set_modo_ligero(self, activo: bool) -> None:
         if bool(activo) != self._modo_ligero:
@@ -289,19 +312,72 @@ class Panel(QWidget):
             aviso.setAlpha(int(255 * pulso))
             p.setPen(Qt.NoPen)
             p.setBrush(aviso)
-            p.drawEllipse(ANCHO - 54, 18, 9, 9)
+            p.drawEllipse(_X_AVISO, 18, 9, 9)
             if self._pendientes > 1:
                 fuente = QFont()
                 fuente.setPointSize(7)
                 fuente.setBold(True)
                 p.setFont(fuente)
                 p.setPen(_FONDO)
-                p.drawText(QRect(ANCHO - 54, 18, 9, 9), Qt.AlignCenter,
+                p.drawText(QRect(_X_AVISO, 18, 9, 9), Qt.AlignCenter,
                            str(min(9, self._pendientes)))
 
-        # Botón de minimizar: un guion, sin adornos.
-        p.setPen(QPen(_TENUE, 1.6))
-        p.drawLine(ANCHO - 30, 22, ANCHO - 18, 22)
+        self._pintar_botones(p)
+
+    # ── Botones de la cabecera ───────────────────────────────────────
+
+    @staticmethod
+    def rect_boton(nombre: str) -> QRect:
+        """Dónde vive cada botón. Lo usan el pintado Y el clic."""
+        i = BOTONES.index(nombre)
+        centro_x = ANCHO - 24 - i * _PASO_BOTON
+        return QRect(centro_x - BOTON // 2, 22 - BOTON // 2, BOTON, BOTON)
+
+    def _pintar_botones(self, p: QPainter) -> None:
+        for nombre in BOTONES:
+            caja = self.rect_boton(nombre)
+            cx = caja.center().x() + 1
+            cy = caja.center().y() + 1
+            # Encendido = está apagando algo. Ámbar y no rojo: no es un
+            # error, es una decisión tuya.
+            activo = (nombre == "mudo" and self._voz_silenciada) or (
+                nombre == "sordo" and self._sordo)
+            tinte = _AVISO if activo else _TENUE
+
+            if nombre == "minimizar":
+                p.setPen(QPen(tinte, 1.6))
+                p.drawLine(cx - 6, cy, cx + 6, cy)
+                continue
+
+            p.setPen(QPen(tinte, 1.5))
+            p.setBrush(Qt.NoBrush)
+            if nombre == "mudo":
+                # Un altavoz: el cono relleno y dos ondas.
+                cono = QPainterPath()
+                cono.moveTo(cx - 6, cy - 2)
+                cono.lineTo(cx - 3, cy - 2)
+                cono.lineTo(cx, cy - 6)
+                cono.lineTo(cx, cy + 6)
+                cono.lineTo(cx - 3, cy + 2)
+                cono.lineTo(cx - 6, cy + 2)
+                cono.closeSubpath()
+                p.fillPath(cono, tinte)
+                if not activo:
+                    p.drawArc(cx - 1, cy - 5, 8, 10, -70 * 16, 140 * 16)
+                    p.drawArc(cx - 1, cy - 8, 13, 16, -60 * 16, 120 * 16)
+            else:
+                # Un micrófono: cápsula, arco y pie.
+                p.setBrush(tinte)
+                p.drawRoundedRect(cx - 2, cy - 7, 5, 8, 2.5, 2.5)
+                p.setBrush(Qt.NoBrush)
+                p.drawArc(cx - 5, cy - 4, 11, 10, 200 * 16, 140 * 16)
+                p.drawLine(cx, cy + 4, cx, cy + 7)
+
+            if activo:
+                # La raya diagonal es lo que se lee de un vistazo; el
+                # cambio de color solo, no.
+                p.setPen(QPen(tinte, 1.6))
+                p.drawLine(cx - 7, cy + 7, cx + 7, cy - 7)
 
     def _pintar_onda(self, p: QPainter, color: QColor) -> None:
         arriba, alto = 40, 52
@@ -436,13 +512,23 @@ class Panel(QWidget):
     # ── Interacción ──────────────────────────────────────────────────
 
     def mousePressEvent(self, e) -> None:  # noqa: ANN001, N802
-        if e.button() == Qt.LeftButton:
-            if e.pos().x() > ANCHO - 40 and e.pos().y() < 36:
-                self.minimizar.emit()
+        if e.button() != Qt.LeftButton:
+            return
+        for nombre in BOTONES:
+            if self.rect_boton(nombre).contains(e.pos()):
+                self._pulsar(nombre)
                 e.accept()
                 return
-            self._arrastre = e.globalPos() - self.frameGeometry().topLeft()
-            e.accept()
+        self._arrastre = e.globalPos() - self.frameGeometry().topLeft()
+        e.accept()
+
+    def _pulsar(self, nombre: str) -> None:
+        if nombre == "minimizar":
+            self.minimizar.emit()
+        elif nombre == "mudo" and self._on_toggle_mute:
+            self._on_toggle_mute()
+        elif nombre == "sordo" and self._on_toggle_sordo:
+            self._on_toggle_sordo()
 
     def mouseMoveEvent(self, e) -> None:  # noqa: ANN001, N802
         if self._arrastre is not None and e.buttons() & Qt.LeftButton:
@@ -461,7 +547,13 @@ class Panel(QWidget):
         )
         menu.addAction("Minimizar al orbe", self.minimizar.emit)
         if self._on_toggle_mute:
-            menu.addAction("Silenciar / reactivar voz", self._on_toggle_mute)
+            menu.addAction(
+                "Dejar de hablar" if not self._voz_silenciada else "Volver a hablar",
+                self._on_toggle_mute)
+        if self._on_toggle_sordo:
+            menu.addAction(
+                "Dejar de escuchar" if not self._sordo else "Volver a escuchar",
+                self._on_toggle_sordo)
         menu.addSeparator()
         menu.addAction("Salir de NOVA", self._on_quit or (lambda: None))
         menu.exec_(e.globalPos())

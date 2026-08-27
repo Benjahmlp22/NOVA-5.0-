@@ -182,6 +182,10 @@ class VoiceListener:
         # de seguimiento: te acaba de decir "dime" y estás pensando qué
         # pedirle. Sin esto NOVA te ignoraba a media frase.
         self._esperando_orden = False
+        # El usuario ha decidido que NOVA no escuche. Distinto de
+        # `_muted`, que es momentáneo y lo pone ella misma mientras habla:
+        # esto lo pones tú y dura hasta que lo quites.
+        self._sordo = False
         # NOVA ha hecho una pregunta y espera respuesta. Mientras dure,
         # ni se duerme ni exige que la vuelvas a nombrar.
         self._esperando_respuesta_hasta = 0.0
@@ -271,6 +275,21 @@ class VoiceListener:
             return False
         self._bloques_hablando_encima += 1
         return self._bloques_hablando_encima >= BLOQUES_INTERRUPCION
+
+    @property
+    def sordo(self) -> bool:
+        return self._sordo
+
+    def ensordecer(self, si: bool = True) -> None:
+        """Deja de escuchar del todo, hasta que se diga lo contrario.
+
+        El micrófono se sigue leyendo (cerrar y reabrir el flujo tarda y
+        a veces falla), pero el audio se tira sin mirarlo: ni wake word,
+        ni transcripción, ni nada. Volver a oír es instantáneo.
+        """
+        self._sordo = bool(si)
+        if self._sordo:
+            self.sleep_now("sordo")
 
     def esperar_respuesta(self, si: bool = True) -> None:
         """NOVA acaba de preguntar algo: aguanta despierta hasta la respuesta.
@@ -475,6 +494,12 @@ class VoiceListener:
                 # hablando: es lo que evita perder el principio de la
                 # respuesta del usuario al terminar el TTS.
                 self._preroll.append(bloque)
+
+                if self._sordo:
+                    # Ni se mira. Es lo único honesto cuando el usuario
+                    # ha dicho que no escuche: cualquier cosa que hiciera
+                    # aquí sería procesar audio suyo a su espalda.
+                    continue
 
                 if self._muted.is_set():
                     if self._me_estan_interrumpiendo(rms(bloque)):
