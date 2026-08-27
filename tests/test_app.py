@@ -255,3 +255,66 @@ def test_vuelve_al_bueno_al_cerrar_el_juego():
     # Y la interfaz se entera de las dos veces: el usuario tiene que
     # poder saber por qué NOVA fue lenta un rato.
     assert n.ui.avisos == [True, False]
+
+
+# ── Dormirse no puede arrastrar un "sí/no" pendiente ──────────────────
+#
+# Bug real: si dices "adiós" con una confirmación en el aire (p.ej.
+# borrar algo), NOVA se dormía y la dejaba en la cola. La próxima vez
+# que la despertaras, un "sí" a CUALQUIER otra cosa ejecutaba esa acción
+# vieja y olvidada — que puede ser un borrado.
+
+class _GlowFalso:
+    def apagar(self):
+        pass
+
+
+class _UIFalsaDormir:
+    def __init__(self):
+        self.estados = []
+
+    def set_dicho(self, t):
+        pass
+
+    def set_respondido(self, t):
+        pass
+
+    def set_estado(self, e):
+        self.estados.append(e)
+
+
+class _NovaDormida:
+    _ocupada = False
+    _respuesta_en_curso = ""
+    _avisos_pendientes: list = []
+
+    def __init__(self, pendientes):
+        self.glow = _GlowFalso()
+        self.ui = _UIFalsaDormir()
+        self._pendientes = pendientes
+        self.dichos = []
+
+    def _decir(self, *a, **kw):
+        self.dichos.append(a)
+
+    _al_dormir = Nova._al_dormir
+
+
+def test_dormirse_descarta_una_confirmacion_sin_contestar():
+    from nova.tools.registry import PendingConfirmation
+    n = _NovaDormida([PendingConfirmation(tool="test.borrar", args={}, summary="borrar algo")])
+    n._al_dormir("silencio")
+    assert n._pendientes == []
+
+
+def test_dormirse_por_despedida_tambien_descarta_lo_pendiente():
+    from nova.tools.registry import PendingConfirmation
+    n = _NovaDormida([PendingConfirmation(tool="test.borrar", args={}, summary="borrar algo")])
+    n._al_dormir("despedida")
+    assert n._pendientes == []
+
+
+def test_dormirse_sin_nada_pendiente_no_hace_nada_raro():
+    n = _NovaDormida([])
+    n._al_dormir("silencio")
+    assert n._pendientes == []

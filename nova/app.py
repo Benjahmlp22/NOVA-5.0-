@@ -595,6 +595,15 @@ class Nova(QObject):
         self.ui.set_respondido("")
         self._respuesta_en_curso = ""
         self._avisos_pendientes: list = []
+        if self._pendientes:
+            # Dormirse con un "sí/no" en el aire es peligroso de verdad:
+            # la próxima vez que la despiertes, un "sí" a CUALQUIER OTRA
+            # cosa ejecutaría esta acción olvidada de la sesión anterior
+            # — y puede ser un borrado. Se descarta al dormir, no se
+            # arrastra.
+            log.info("me duermo con %d confirmación(es) sin contestar: se descartan",
+                     len(self._pendientes))
+            self._pendientes = []
         if not self._ocupada:
             self.ui.set_estado("dormida")
         if motivo == "despedida":
