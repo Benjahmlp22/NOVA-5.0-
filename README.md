@@ -280,6 +280,24 @@ en bruto que sí hay que resumir.
 Se mide con `bench/bench_herramientas.py`, donde un tercio de los casos
 son «aquí no llames a nada».
 
+**Y detrás de todo esto había un bug de fondo, no de hoy: `num_ctx`
+nunca se había fijado.** Ollama usa 2048 tokens de contexto si nadie
+dice lo contrario, y el catálogo de 52 herramientas por sí solo pesa
+2050 — por encima del límite en cuanto se suma un mensaje. El modelo
+respondía a un prompt cortado a la mitad, y el síntoma no lo parecía en
+absoluto:
+
+```
+«cierra Spotify»  ->  voz_cambiar(descripcion="ponte voz de hombre")
+```
+
+Sin relación con lo pedido, reproducible 6 de 6 veces. Confirmado
+forzando `num_ctx=8192` en la misma petición: ahí sí acertó. Con el
+arreglo, el banco pasa de 20/34 (estable en 6 vueltas, dos
+temperaturas) a **34/34**. En VRAM cuesta 280 MB — nada, sobra en 12 GB.
+
+`NOVA_NUM_CTX=8192` en el `.env`.
+
 ## Escuchar sin responder a todo
 
 Un asistente que responde a lo que oiga es peor que uno sordo. Cinco
