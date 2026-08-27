@@ -109,8 +109,9 @@ conexión · capturas de pantalla · volumen del sistema y **de una app
 concreta**.
 
 **Tus cosas.** Buscar y abrir archivos en Escritorio, Descargas,
-Documentos e Imágenes · **ordenar Descargas y el Escritorio** por tipo
-(y deshacerlo) · crear, leer y borrar en su carpeta de trabajo ·
+Documentos e Imágenes · **abrir una carpeta**, ver cuánto ocupa, qué ha
+llegado hoy y qué pesa más · **ordenar Descargas y el Escritorio** por
+tipo (y deshacerlo) · crear, leer y borrar en su carpeta de trabajo ·
 **apuntar lo que le dictes** · leer y resumir **lo que tengas copiado** ·
 recordar cosas de ti entre sesiones · recordatorios, alarmas y
 temporizadores.
@@ -240,6 +241,44 @@ Sigue siendo PyQt5, sin marco, siempre encima, fuera del Alt+Tab
 (`Qt.Tool`) y con `WA_ShowWithoutActivating`: **no roba el foco**.
 Comprobado con una partida a pantalla completa delante — el panel se ve
 encima y el juego no se entera.
+
+## No llamar a herramientas por los buenos días
+
+Un modelo pequeño con un catálogo delante quiere usarlo. Medido con el
+modelo real y las herramientas cargadas:
+
+| le dices | llamaba a |
+|---|---|
+| «adiós» | `memory.forget` — **que borra cosas** |
+| «hola» | `pc.status`, `pc.active_window`, `pc.running_apps` |
+| «qué tal el día» | `pc.status` |
+
+Y no es por tener muchas: con las 27 de antes pasaba igual (17/20 con 27
+y 17/20 con 48, los mismos fallos).
+
+El prompt ya lo prohibía. No bastó, como no bastaba con el relleno ni
+con los permisos, así que va por código (`nova/core/charla.py`): si lo
+que has dicho es charla y nada más, al modelo se le pregunta **sin
+herramientas** y le resulta imposible llamar a ninguna.
+
+Conservador a propósito. Tomar una orden por charla dejaría a NOVA sin
+hacer lo que le pediste, que es mucho peor que ofrecer herramientas de
+más: sólo cuenta si la frase ENTERA, quitados los adornos, es una de las
+conocidas. «hola» sí; «hola, abre Discord» no.
+
+**Y cuando la herramienta ya trae la respuesta, esa ES la respuesta.**
+Preguntando «cuál es el archivo más grande de descargas», NOVA elegía
+bien, recibía «Lo que más ocupa: setup.exe, 1.8 gigas…» y contestaba «si
+quieres que te diga qué ocupa más, dímelo». Tenía la respuesta delante y
+no la daba. Las 19 herramientas que informan llevan `responde_sola` y su
+mensaje sale tal cual — sin darle al modelo otra oportunidad de
+estropearlo, y con una vuelta al modelo menos.
+
+Sólo las que informan. `web.search` y `pantalla.leer` devuelven material
+en bruto que sí hay que resumir.
+
+Se mide con `bench/bench_herramientas.py`, donde un tercio de los casos
+son «aquí no llames a nada».
 
 ## Escuchar sin responder a todo
 
@@ -614,6 +653,7 @@ nova/
   config.py         toda la configuración, con los porqués
   core/
     agent.py        bucle LLM ↔ herramientas
+    charla.py       cuándo NO hay nada que hacer, sólo que contestar
     conversation.py personalidad e historial
     awareness.py    hora, app activa, batería, clima
     polish.py       limpieza de tics y longitud de la voz
@@ -631,7 +671,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              414 tests, sin red ni micrófono
+tests/              496 tests, sin red ni micrófono
 ```
 
 ## Tests
