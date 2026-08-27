@@ -51,12 +51,22 @@ def _registro(policy: str = "solo_peligroso") -> ToolRegistry:
 
 
 def test_respuesta_directa_sin_herramientas():
-    llm = FakeLLM([LLMResponse(text="Hola.")])
-    reply = Agent(llm, _registro()).run("sys", [], "hola")
-    assert reply.text == "Hola."
+    llm = FakeLLM([LLMResponse(text="Claro que sí.")])
+    reply = Agent(llm, _registro()).run("sys", [], "cuánto es dos más dos")
+    assert reply.text == "Claro que sí."
     assert reply.tools_used == []
     # El catálogo se le ofrece igualmente, por si lo necesita.
     assert llm.llamadas[0]["tools"]
+
+
+def test_a_la_charla_no_se_le_ensena_el_catalogo():
+    """Medido con el modelo real: con las herramientas delante, "adiós"
+    llamaba a memory.forget, que BORRA cosas. Sin catálogo le es
+    imposible; con el prompt pidiéndoselo, no."""
+    for frase in ("hola", "gracias", "adiós", "vale"):
+        llm = FakeLLM([LLMResponse(text="Hola.")])
+        Agent(llm, _registro()).run("sys", [], frase)
+        assert llm.llamadas[0]["tools"] is None, frase
 
 
 def test_ejecuta_herramienta_y_responde():
@@ -273,3 +283,77 @@ def test_sin_nada_pendiente_la_cola_esta_vacia():
     reply = Agent(llm, _registro()).run("sys", [], "di hola")
     assert reply.pendientes == []
     assert reply.pending is None
+
+
+# ── Las herramientas que ya contestan solas ──────────────────────────
+#
+# "Cuál es el archivo más grande de descargas": NOVA llamaba bien a la
+# herramienta, recibía "Lo que más ocupa: setup.exe, 1.8 gigas..." y
+# contestaba "si quieres que te diga qué ocupa más, dímelo". Tenía la
+# respuesta delante y no la daba.
+
+def _registro_con_informativa() -> ToolRegistry:
+    reg = _registro()
+    reg.register(Tool(
+        name="test.informar",
+        description="Cuenta algo",
+        handler=lambda: ToolResult(ok=True, message="Ocupa 1.8 gigas."),
+        risk=Risk.SAFE,
+        responde_sola=True,
+    ))
+    return reg
+
+
+def test_una_herramienta_que_informa_contesta_ella():
+    llm = FakeLLM([LLMResponse(tool_calls=[ToolCall(id="1", name="test.informar")])])
+    reply = Agent(llm, _registro_con_informativa()).run("sys", [], "cuánto ocupa")
+    assert reply.text == "Ocupa 1.8 gigas."
+    # Y se ahorra la vuelta al modelo: sólo se le llamó una vez.
+    assert len(llm.llamadas) == 1
+
+
+def test_si_falla_no_contesta_ella(_=None):
+    """Un fallo sí necesita que el modelo lo explique."""
+    reg = _registro()
+    reg.register(Tool(
+        name="test.rota",
+        description="Falla siempre",
+        handler=lambda: ToolResult(ok=False, message="No pude."),
+        risk=Risk.SAFE,
+        responde_sola=True,
+    ))
+    llm = FakeLLM([
+        LLMResponse(tool_calls=[ToolCall(id="1", name="test.rota")]),
+        LLMResponse(text="No he podido."),
+    ])
+    reply = Agent(llm, reg).run("sys", [], "haz algo")
+    assert reply.text == "No he podido."
+
+
+def test_mezclada_con_otra_normal_no_contesta_ella():
+    """Si en la misma ronda hay algo que el modelo sí tiene que redactar,
+    manda el modelo."""
+    reg = _registro_con_informativa()
+    llm = FakeLLM([
+        LLMResponse(tool_calls=[
+            ToolCall(id="1", name="test.informar"),
+            ToolCall(id="2", name="test.eco", args={"text": "hola"}),
+        ]),
+        LLMResponse(text="Listo."),
+    ])
+    reply = Agent(llm, reg).run("sys", [], "haz las dos cosas")
+    assert reply.text == "Listo."
+
+
+def test_la_respuesta_de_la_herramienta_se_dice_aunque_el_modelo_hablara_antes():
+    """cerrar() se calla cuando lo nuevo no continúa lo ya dicho, para no
+    repetirse. Pasando por ahí, la respuesta no se diría NUNCA."""
+    dichas: list[str] = []
+    llm = FakeLLM([LLMResponse(
+        text="Voy a mirarlo.",
+        tool_calls=[ToolCall(id="1", name="test.informar")],
+    )])
+    reply = Agent(llm, _registro_con_informativa(),
+                  on_frase=dichas.append).run("sys", [], "cuánto ocupa")
+    assert reply.text == "Ocupa 1.8 gigas."
+    assert reply.ya_dicho is False        # que la diga quien reciba esto

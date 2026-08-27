@@ -31,8 +31,14 @@ _RELLENO_FINAL = re.compile(
     # "estoy aquí para ayudarte", pero también "¡aquí estoy para ayudarte
     # desde aquí!" — visto tal cual en el log real del 25/07. El orden de
     # las palabras cambia en cada generación; la forma fija es el
-    # "estoy ... para ayudar", así que es eso lo que se ancla.
-    r"(?:aqu[ií]\s+)?estoy(?:\s+(?:siempre\s+)?aqu[ií])?\s+para\s+ayudar(?:te|le)?[^.!?]*|"
+    # "... para ayudar", así que es eso lo que se ancla.
+    #
+    # El verbo también cambia: anclado sólo en "estoy" se coló "yo estaré
+    # aquí para ayudarte con lo que necesites" (27/08). Así que entran
+    # todas sus formas y las de "seguir".
+    r"(?:yo\s+)?(?:aqu[ií]\s+)?"
+    r"(?:estoy|estar[ée]|estar[ée]mos|estaba|sigo|seguir[ée]|quedo|me quedo)"
+    r"(?:\s+(?:siempre\s+)?aqu[ií])?\s+para\s+ayudar(?:te|le|les)?[^.!?]*|"
     r"no dudes en (?:preguntar|dec[ií]rmelo|consultarme)[^.!?]*"
     r")\s*[.!?]*\s*$",
     re.IGNORECASE,
