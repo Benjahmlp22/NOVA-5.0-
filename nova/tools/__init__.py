@@ -11,6 +11,7 @@ from . import (
     memory,
     notas,
     organizar,
+    pantalla,
     portapapeles,
     recordatorios,
     system,
@@ -43,6 +44,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     buscar_archivos.register(reg)
     voz.register(reg)
     organizar.register(reg)
+    pantalla.register(reg)
     return reg
 
 

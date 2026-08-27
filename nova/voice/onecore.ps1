@@ -25,6 +25,12 @@
 
 $ErrorActionPreference = 'Stop'
 
+# UTF-8 en la salida. Sin esto, PowerShell escribe en la página de
+# códigos de la consola (cp1252 aquí) y cualquier acento que salga sin
+# pasar por base64 llega roto: "Español" se convirtió en "Espa?ol" la
+# primera vez que se listaron los idiomas.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
 [Windows.Media.SpeechSynthesis.SpeechSynthesizer, Windows.Media, ContentType=WindowsRuntime] | Out-Null
 [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
 Add-Type -AssemblyName System.Runtime.WindowsRuntime

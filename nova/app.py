@@ -44,7 +44,15 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
-from .tools import PendingConfirmation, apps, build_registry, memory, recordatorios, voz
+from .tools import (
+    PendingConfirmation,
+    apps,
+    build_registry,
+    memory,
+    pantalla,
+    recordatorios,
+    voz,
+)
 from .ui import Interfaz
 from .voice import Speaker, Transcriptor, VoiceListener, play_chime
 
@@ -504,6 +512,7 @@ class Nova(QObject):
         self.ui.cerrar()
         self.listener.stop()
         self.speaker.stop()
+        pantalla.cerrar()
         self.awareness.stop()
         self._hilo.quit()
         self._hilo.wait(1500)
