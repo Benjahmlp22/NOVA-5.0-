@@ -13,11 +13,17 @@
 # NOVA sintetiza frase a frase mientras el modelo escribe. Pagando el
 # arranque una vez, cada frase cuesta 11 ms.
 #
-# Protocolo, una línea por petición:
-#   VOCES                     -> lista de voces, una por línea, y OK
-#   VOZ <nombre>              -> elige voz, responde OK o ERROR
-#   VELOCIDAD <n>             -> 1.0 es normal; responde OK
-#   DI <base64> <ruta.wav>    -> sintetiza y responde OK o ERROR
+# Protocolo, una línea por petición, SIEMPRE con su número delante:
+#   <n> VOCES                     -> "<n> VOZ ..." por cada una, y "<n> OK"
+#   <n> VOZ <nombre>              -> "<n> OK" o "<n> ERROR ..."
+#   <n> VELOCIDAD <x>             -> 1.0 es normal; "<n> OK"
+#   <n> DI <base64> <ruta.wav>    -> "<n> OK" o "<n> ERROR ..."
+#
+# El número no es adorno. Si una respuesta llega tarde y quien preguntó
+# ya se cansó de esperar, sin número la recoge la petición SIGUIENTE y a
+# partir de ahí todo va corrido un puesto: NOVA daba por escrita una
+# frase que aún no lo estaba y leía el WAV anterior a medias, diciendo
+# "S", "EST" y trozos sueltos.
 #
 # El texto va en base64 a propósito: por stdin, los acentos se
 # corrompían según la página de códigos de la consola, y "cañón" llegaba
@@ -61,12 +67,21 @@ while ($true) {
     if ($linea -eq '') { continue }
     if ($linea -eq 'SALIR') { break }
 
+    # Cada peticion llega numerada y su respuesta lleva el mismo numero.
+    # Sin eso, una respuesta que llega tarde la recoge la peticion
+    # SIGUIENTE y a partir de ahi todo va corrido un puesto.
+    $corte = $linea.IndexOf(' ')
+    if ($corte -lt 1) { continue }
+    $id = $linea.Substring(0, $corte)
+    $linea = $linea.Substring($corte + 1).Trim()
+    if ($linea -eq 'SALIR') { break }
+
     try {
         if ($linea -eq 'VOCES') {
             foreach ($v in [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices) {
-                Write-Output "VOZ`t$($v.DisplayName)`t$($v.Language)`t$($v.Gender)"
+                Write-Output "$id VOZ`t$($v.DisplayName)`t$($v.Language)`t$($v.Gender)"
             }
-            Write-Output 'OK'
+            Write-Output "$id OK"
             continue
         }
 
@@ -74,9 +89,9 @@ while ($true) {
             $quiero = $linea.Substring(4).Trim()
             $v = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices |
                  Where-Object { $_.DisplayName -eq $quiero } | Select-Object -First 1
-            if ($null -eq $v) { Write-Output "ERROR no existe $quiero"; continue }
+            if ($null -eq $v) { Write-Output "$id ERROR no existe $quiero"; continue }
             $synth.Voice = $v
-            Write-Output 'OK'
+            Write-Output "$id OK"
             continue
         }
 
@@ -85,7 +100,7 @@ while ($true) {
             # WinRT acepta de 0.5 a 6.0; por encima de 2 no se entiende
             # nada, así que se corta antes de que lo haga Windows.
             $synth.Options.SpeakingRate = [Math]::Max(0.5, [Math]::Min(2.0, $v))
-            Write-Output 'OK'
+            Write-Output "$id OK"
             continue
         }
 
@@ -102,15 +117,15 @@ while ($true) {
             [IO.File]::WriteAllBytes($destino, $bytes)
             $reader.Dispose()
             $stream.Dispose()
-            Write-Output 'OK'
+            Write-Output "$id OK"
             continue
         }
 
-        Write-Output "ERROR no entiendo $linea"
+        Write-Output "$id ERROR no entiendo $linea"
     }
     catch {
         # Nunca morir por una frase: NOVA se quedaría muda a mitad de
         # conversación y sin saber por qué.
-        Write-Output "ERROR $($_.Exception.Message -replace "`r?`n", ' ')"
+        Write-Output "$id ERROR $($_.Exception.Message -replace "`r?`n", ' ')"
     }
 }

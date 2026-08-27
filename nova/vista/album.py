@@ -46,15 +46,10 @@ _SALTAR = frozenset({
 # barato que abrirla para mirar el tamaño real.
 MINIMO_BYTES = 12_000
 
-# Lote de 32 y todos los hilos. Medido en este PC (12 hilos), por imagen:
-#
-#   auto  lote 8    72 ms       6 hilos  lote 32   61 ms
-#   auto  lote 32   80 ms      12 hilos  lote 32   31 ms
-#
-# El "auto" de onnxruntime se queda a menos de la mitad de lo que da la
-# máquina. 31 ms contra 72 son 9 minutos contra 20.
+# Lote de 32, y los hilos los pone clip.py dejando cuatro núcleos libres:
+# esto corre en segundo plano mientras NOVA tiene que seguir hablando.
 LOTE = 32
-HILOS = os.cpu_count() or 4
+HILOS = clip.HILOS
 
 # Frases de contraste para saber CUÁNTA confianza merece un resultado.
 #

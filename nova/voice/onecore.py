@@ -32,10 +32,16 @@ log = logging.getLogger("nova.voice.onecore")
 
 GUION = Path(__file__).with_name("onecore.ps1")
 
-# Cuánto se espera por frase. Medido: 11 ms en caliente. Tres segundos es
-# absurdamente generoso; existe para no colgar a NOVA para siempre si el
-# proceso se queda tonto.
-FRASE_S = 3.0
+# Cuánto se espera por frase.
+#
+# Once milisegundos con la CPU tranquila... y 1909 ms en el peor caso con
+# los doce hilos al tope, medido. Con un juego encima, los tres segundos
+# de antes se agotaban de verdad, y cada plazo agotado partía el audio.
+#
+# Seis segundos dan tres veces margen sobre el peor caso medido. Esperar
+# de más ya no cuesta nada: con las peticiones numeradas, un plazo
+# agotado sólo hace caer a SAPI, no descoloca la cola.
+FRASE_S = 6.0
 
 
 @dataclass(frozen=True)
@@ -99,8 +105,27 @@ class SintetizadorOneCore:
         """Escribe el WAV. False si algo falló, para poder caer a SAPI."""
         if not texto.strip():
             return False
+        # El archivo anterior se quita ANTES. Así, si algo saliera mal
+        # sin decirlo, lo que hay abajo falla en vez de reproducir la
+        # frase de antes: es lo que se oía como "S", "EST" y trozos.
+        try:
+            destino.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         # Base64 y no el texto pelado: por stdin los acentos se corrompen
         # según la página de códigos de la consola, y "cañón" llegaba
         # convertido en otra cosa. Así no hay nada que interpretar.
         cifrado = base64.b64encode(texto.encode("utf-8")).decode("ascii")
-        return self._puente.mandar(f"DI {cifrado} {destino}", espera=FRASE_S) == "OK"
+        if self._puente.mandar(f"DI {cifrado} {destino}", espera=FRASE_S) != "OK":
+            return False
+
+        # Y se comprueba que está de verdad. Un WAV son 44 bytes de
+        # cabecera: menos que eso no es audio, es un archivo a medias.
+        try:
+            if destino.stat().st_size > 44:
+                return True
+        except OSError:
+            pass
+        log.warning("me dijeron que sí pero %s no está escrito", destino.name)
+        return False

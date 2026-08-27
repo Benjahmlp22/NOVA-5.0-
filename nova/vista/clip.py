@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -40,6 +41,18 @@ LADO = 224
 MEDIA = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
 DESVIACION = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
 CONTEXTO = 77          # tokens que acepta el codificador de texto
+
+# Cuántos hilos usar. Dejar cuatro núcleos libres no es un sacrificio:
+# medido en este PC (12 hilos), por imagen —
+#
+#   6 hilos  33 ms      10 hilos  37 ms
+#   8 hilos  31 ms      12 hilos  51 ms
+#
+# — con ocho va MÁS rápido que con doce y además NOVA sigue pudiendo
+# hablar mientras indexa. Con la CPU al tope, sintetizar una frase pasa
+# de 11 ms a 1909 ms en el peor caso, y ahí es donde empezaban los
+# plazos agotados que le partían el audio.
+HILOS = max(2, (os.cpu_count() or 4) - 4)
 
 
 def hay_modelos() -> bool:
@@ -176,7 +189,6 @@ class CodificadorCLIP:
 
     @staticmethod
     def _sesion(archivo: str):
-        import os
 
         import onnxruntime as ort
 
@@ -184,10 +196,10 @@ class CodificadorCLIP:
         # Silencio: ORT avisa de optimizaciones en cada carga y eso
         # acabaría en el log de NOVA sin aportar nada.
         opciones.log_severity_level = 3
-        # Y todos los hilos. El "auto" de onnxruntime se queda a menos de
-        # la mitad de lo que da la máquina: medido en este PC (12 hilos),
-        # 72 ms por imagen en auto contra 31 poniéndolos a mano.
-        opciones.intra_op_num_threads = os.cpu_count() or 4
+        # Los hilos, a mano. El "auto" de onnxruntime se queda a menos de
+        # la mitad de lo que da la máquina: 72 ms por imagen en auto
+        # contra 31 poniéndolos a mano. Ver HILOS arriba.
+        opciones.intra_op_num_threads = HILOS
         return ort.InferenceSession(str(MODELOS / archivo), opciones,
                                     providers=["CPUExecutionProvider"])
 

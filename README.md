@@ -434,6 +434,22 @@ El texto le llega en base64. No es adorno: por stdin los acentos se
 corrompen según la página de códigos de la consola, y «cañón» llegaba
 convertido en otra cosa.
 
+**Y cada petición lleva su número.** Tampoco es adorno, y esto costó un
+fallo en uso real: NOVA dejaba de responder un momento y luego decía
+«S», «EST» y trozos sueltos.
+
+Sintetizar cuesta 11 ms con la CPU tranquila, pero **1909 ms en el peor
+caso con los doce hilos al tope** — medido. Con un juego encima se
+agotaba el plazo de tres segundos que había. Y entonces la respuesta
+atrasada se quedaba en la cola: la petición siguiente la leía como
+suya, daba por escrita una frase que aún no lo estaba, y NOVA
+reproducía el WAV anterior **a medio escribir**. Un plazo agotado y
+todo iba corrido un puesto para siempre.
+
+Con el número, una respuesta que llega tarde se descarta. Y el plazo
+sube a seis segundos, que ahora sale gratis: agotarlo sólo hace caer a
+SAPI, no descolocar nada.
+
 Si algo falla —no hay PowerShell, WinRT no responde, el proceso se
 muere— NOVA sigue con SAPI. Mejor metálica que muda.
 

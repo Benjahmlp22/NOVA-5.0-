@@ -9,14 +9,22 @@ Todo el módulo existe por un número: **arrancar `powershell.exe` cuesta
 porque estas cosas se usan frase a frase o pantallazo a pantallazo.  Con
 el proceso vivo leyendo de stdin, el arranque se paga una vez.
 
-El protocolo es de líneas: una orden, una o varias respuestas, y `OK` o
-`ERROR ...` al final.  Los textos viajan en base64 en los dos sentidos,
-porque por stdin/stdout los acentos se corrompen según la página de
-códigos de la consola y «cañón» llega convertido en otra cosa.
+El protocolo es de líneas y **cada petición lleva su número**.  Eso no
+es adorno: sin él, un solo agotamiento de plazo desincroniza la cola
+para siempre.  La respuesta que llegó tarde se queda dentro, la
+siguiente petición la lee como suya, y a partir de ahí todo va corrido
+un puesto.  En las voces eso significaba dar por buena una frase que
+todavía no se había escrito: NOVA leía el WAV **anterior a medio
+escribir** y decía "S", "EST" y trozos sueltos.
+
+Los textos viajan en base64 en los dos sentidos, porque por
+stdin/stdout los acentos se corrompen según la página de códigos de la
+consola y «cañón» llega convertido en otra cosa.
 """
 
 from __future__ import annotations
 
+import itertools
 import logging
 import queue
 import subprocess
@@ -41,6 +49,7 @@ class PuenteWinRT:
         self._proc: subprocess.Popen | None = None
         self._respuestas: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
+        self._numeros = itertools.count(1)
 
     @property
     def disponible(self) -> bool:
@@ -103,23 +112,15 @@ class PuenteWinRT:
             return ""
 
     def mandar(self, orden: str, espera: float = 3.0) -> str:
-        """Una orden y su respuesta. Serializado: hay un solo proceso."""
+        """Una orden y SU respuesta. Serializado: hay un solo proceso."""
         with self._lock:
-            return self._escribir_y_esperar(orden, espera)
+            lineas = self._conversar(orden, espera, una_sola=True)
+        return lineas[0] if lineas else ""
 
     def mandar_varias(self, orden: str, espera: float = ARRANQUE_S) -> list[str]:
         """Una orden que responde varias líneas antes del OK."""
         with self._lock:
-            if not self._escribir(orden):
-                return []
-            lineas: list[str] = []
-            while True:
-                linea = self.esperar(espera)
-                if linea in ("OK", "") or linea.startswith("ERROR"):
-                    if linea.startswith("ERROR"):
-                        log.warning("%s: %s", self.nombre, linea)
-                    return lineas
-                lineas.append(linea)
+            return self._conversar(orden, espera, una_sola=False)
 
     # ── Internos ─────────────────────────────────────────────────────
 
@@ -135,13 +136,39 @@ class PuenteWinRT:
             self._proc = None
             return False
 
-    def _escribir_y_esperar(self, orden: str, espera: float) -> str:
-        if not self._escribir(orden):
-            return ""
-        respuesta = self.esperar(espera)
-        if respuesta.startswith("ERROR"):
-            log.warning("%s: %s", self.nombre, respuesta)
-        return respuesta
+    def _conversar(self, orden: str, espera: float, *, una_sola: bool) -> list[str]:
+        """Manda una orden numerada y recoge SÓLO lo que responde a ella.
+
+        Las respuestas con otro número son de una petición que se dio por
+        perdida y llegó tarde. Se tiran aquí: si se quedaran en la cola,
+        la siguiente petición las leería como suyas y a partir de ese
+        momento todo iría corrido un puesto, dando por hechas cosas que
+        aún no habían pasado.
+        """
+        numero = next(self._numeros)
+        if not self._escribir(f"{numero} {orden}"):
+            return []
+
+        marca = f"{numero} "
+        recogidas: list[str] = []
+        while True:
+            linea = self.esperar(espera)
+            if not linea:
+                log.warning("%s no contestó a la petición %d", self.nombre, numero)
+                return []
+            if not linea.startswith(marca):
+                log.info("%s: descarto una respuesta atrasada (%r)",
+                         self.nombre, linea[:40])
+                continue
+            cuerpo = linea[len(marca):]
+            if cuerpo.startswith("ERROR"):
+                log.warning("%s: %s", self.nombre, cuerpo)
+                return []
+            if cuerpo == "OK":
+                return recogidas if not una_sola else ["OK"]
+            if una_sola:
+                return [cuerpo]
+            recogidas.append(cuerpo)
 
     def _leer(self) -> None:
         proc = self._proc

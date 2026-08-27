@@ -8,9 +8,12 @@
 # powershell.exe cuesta 179 ms medidos. El proceso se queda vivo y cada
 # petición cuesta lo que cuesta reconocer, no lo que cuesta arrancar.
 #
-# Protocolo, una línea por petición:
-#   IDIOMAS            -> los que hay instalados, y OK
-#   LEE <ruta.png>     -> UNA línea: "TEXTO <base64>" o "ERROR ..."
+# Protocolo, una línea por petición, SIEMPRE con su número delante:
+#   <n> IDIOMAS         -> "<n> IDIOMA ..." por cada uno, y "<n> OK"
+#   <n> LEE <ruta.png>  -> "<n> TEXTO <base64>" o "<n> ERROR ..."
+#
+# El número evita que una respuesta atrasada la recoja la petición
+# siguiente, que dejaría la cola corrida un puesto para siempre.
 #
 # La respuesta va en base64 por dos razones: el texto reconocido lleva
 # saltos de línea (y el protocolo es de una línea por respuesta), y los
@@ -57,12 +60,21 @@ while ($true) {
     if ($linea -eq '') { continue }
     if ($linea -eq 'SALIR') { break }
 
+    # Cada peticion llega numerada y su respuesta lleva el mismo numero.
+    # Sin eso, una respuesta que llega tarde la recoge la peticion
+    # SIGUIENTE y a partir de ahi todo va corrido un puesto.
+    $corte = $linea.IndexOf(' ')
+    if ($corte -lt 1) { continue }
+    $id = $linea.Substring(0, $corte)
+    $linea = $linea.Substring($corte + 1).Trim()
+    if ($linea -eq 'SALIR') { break }
+
     try {
         if ($linea -eq 'IDIOMAS') {
             foreach ($l in [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages) {
-                Write-Output "IDIOMA`t$($l.LanguageTag)`t$($l.DisplayName)"
+                Write-Output "$id IDIOMA`t$($l.LanguageTag)`t$($l.DisplayName)"
             }
-            Write-Output 'OK'
+            Write-Output "$id OK"
             continue
         }
 
@@ -87,13 +99,13 @@ while ($true) {
             # esa línea suelta en la cola, y la siguiente lectura
             # devolvía el texto de la imagen ANTERIOR.
             $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($texto))
-            Write-Output "TEXTO $b64"
+            Write-Output "$id TEXTO $b64"
             continue
         }
 
-        Write-Output "ERROR no entiendo $linea"
+        Write-Output "$id ERROR no entiendo $linea"
     }
     catch {
-        Write-Output "ERROR $($_.Exception.Message -replace "`r?`n", ' ')"
+        Write-Output "$id ERROR $($_.Exception.Message -replace "`r?`n", ' ')"
     }
 }
