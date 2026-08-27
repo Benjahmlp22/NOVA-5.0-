@@ -160,3 +160,34 @@ def test_un_json_roto_no_tumba_nada(almacen_temporal):
     (almacen_temporal / "recordatorios.json").write_text("{roto", encoding="utf-8")
     assert rec.cargar() == []
     assert rec.crear("algo", "en 5 minutos").ok
+
+
+# ── "Un temporizador DE 3 minutos" ───────────────────────────────────
+#
+# Pidiendo un timer nadie dice "en". El parser sólo aceptaba "en" y
+# "dentro de", así que entendía la orden entera menos la parte que
+# importaba y NOVA respondía que no sabía cuándo avisar.
+
+@pytest.mark.parametrize("frase,minutos", [
+    ("un timer de 3 minutos", 3),
+    ("pon un temporizador de 10 minutos", 10),
+    ("temporizador de media hora", 30),
+    ("avísame en 2 minutos", 2),
+])
+def test_entiende_como_se_pide_un_temporizador(frase, minutos):
+    ahora = datetime(2026, 8, 27, 12, 0)
+    cuando, _ = rec.interpretar_cuando(frase, ahora)
+    assert cuando == ahora + timedelta(minutes=minutos)
+
+
+@pytest.mark.parametrize("frase", [
+    "de nada",
+    "háblame de fútbol",
+    "recuérdame lo de la cena",
+    "acuérdate de mí",
+])
+def test_el_de_suelto_no_se_confunde_con_una_duracion(frase):
+    """Aceptar "de" es lo que arriesga falsos positivos: va pegado a una
+    cantidad Y una unidad de tiempo, no suelto."""
+    cuando, _ = rec.interpretar_cuando(frase, datetime(2026, 8, 27, 12, 0))
+    assert cuando is None

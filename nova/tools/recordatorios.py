@@ -59,8 +59,14 @@ def _sin_tildes(texto: str) -> str:
     )
 
 
+# "en 10 minutos", "dentro de media hora"... y también "un temporizador
+# DE 3 minutos": pidiendo un timer nadie dice "en". Sin aceptar el "de",
+# NOVA entendía la orden entera menos la parte que importaba.
+#
+# El "de" es peligroso suelto ("hablamos de fútbol"), así que va pegado a
+# una cantidad Y una unidad de tiempo: "de 3 minutos" sí, "de nada" no.
 _EN_UN_RATO = re.compile(
-    r"\b(?:en|dentro de)\s+(\d+|un|una|medi[ao])\s*"
+    r"\b(?:en|dentro de|de)\s+(\d+|un|una|medi[ao])\s*"
     r"(segundos?|minutos?|min|horas?|h|dias?|semanas?)\b"
 )
 _A_LAS = re.compile(r"\ba\s+la?s?\s+(\d{1,2})(?:[:.](\d{2}))?\s*(de la\s+\w+|am|pm)?\b")
