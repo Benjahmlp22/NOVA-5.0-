@@ -43,10 +43,33 @@ import threading
 import time
 import wave
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
+from .onecore import SintetizadorOneCore, Voz
+
 log = logging.getLogger("nova.voice.speaker")
+
+
+def elegir_por_defecto(voces: list[Voz]) -> Voz | None:
+    """Con cuál habla NOVA si nadie ha dicho otra cosa.
+
+    Helena, que es la MISMA que venía usando por SAPI. Estrenar
+    sintetizador no es motivo para cambiarle la voz a NOVA de un día para
+    otro, y menos el sexo: eso se pide, no se hereda de en qué orden
+    liste Windows sus voces (lista a Pablo primero).
+
+    Cuál suena mejor no lo decide ninguna medida, lo decide el oído. Por
+    eso se puede cambiar hablando.
+    """
+    if not voces:
+        return None
+    for v in voces:
+        if "helena" in v.nombre.lower():
+            return v
+    espanolas = [v for v in voces if v.idioma.lower() == "es-es"]
+    return (espanolas or [v for v in voces if v.es_espanol] or voces)[0]
 
 _STOP = object()  # centinela de apagado
 
@@ -88,6 +111,12 @@ class Speaker:
         self._interrupt = threading.Event()
         self._voz_confirmada = False
         self.error = ""
+        # Las voces buenas de Windows (Pablo, Laura, Raul...), que SAPI
+        # no enseña. Si no arrancan, `disponible` se queda en False y
+        # todo sigue por SAPI como siempre.
+        self._onecore = SintetizadorOneCore()
+        self._voz_onecore = ""
+        self._velocidad = 1.0
 
     @property
     def speaking(self) -> bool:
@@ -105,12 +134,54 @@ class Speaker:
             log.warning(self.error)
             self.enabled = False
             return False
+        # Se intenta OneCore, pero su fallo NO es motivo para quedarse
+        # muda: SAPI está en cualquier Windows.
+        if self._onecore.start():
+            preferida = elegir_por_defecto(self._onecore.voces)
+            if preferida:
+                self._usar_onecore(preferida.nombre)
+        else:
+            log.info("sigo con SAPI: %s", self._onecore.error)
+
         self._thread = threading.Thread(target=self._run, daemon=True, name="voz-tts")
         self._thread.start()
         return True
 
     def stop(self) -> None:
         self._queue.put(_STOP)
+        self._onecore.stop()
+
+    # ── Qué voz se usa ───────────────────────────────────────────────
+
+    @property
+    def voz_actual(self) -> str:
+        return self._voz_onecore or "Microsoft Helena Desktop"
+
+    def voces(self) -> list[Voz]:
+        """Las que se pueden elegir. Sólo las de OneCore: las de SAPI son
+        dos, las dos de mujer, y existen únicamente como red de
+        seguridad."""
+        return list(self._onecore.voces)
+
+    def _usar_onecore(self, nombre: str) -> bool:
+        if not self._onecore.elegir(nombre):
+            return False
+        self._voz_onecore = nombre
+        self._onecore.velocidad(self._velocidad)
+        log.info("voz: %s", nombre)
+        return True
+
+    def usar_voz(self, nombre: str) -> bool:
+        return self._usar_onecore(nombre)
+
+    def set_velocidad(self, factor: float) -> bool:
+        """1.0 normal. Sólo con OneCore; SAPI usa `rate` en palabras/minuto."""
+        self._velocidad = max(0.5, min(2.0, factor))
+        if self._voz_onecore:
+            return self._onecore.velocidad(self._velocidad)
+        # En SAPI la velocidad son palabras por minuto, no un factor.
+        self.rate = int(195 * self._velocidad)
+        return True
 
     # ── Uso ──────────────────────────────────────────────────────────
 
@@ -181,15 +252,25 @@ class Speaker:
     # ── Síntesis ─────────────────────────────────────────────────────
 
     def _sintetizar(self, texto: str) -> tuple[np.ndarray | None, int]:
-        """Pide el audio a SAPI en vez de dejarle hablar."""
+        """Pide el audio a Windows en vez de dejarle hablar.
+
+        Por OneCore si está (11 ms medidos por frase) y por SAPI si no
+        (142 ms, porque hay que construir un motor nuevo cada vez para
+        esquivar el reciclado roto de pyttsx3). Los 130 ms de diferencia
+        se pagan en CADA frase, porque NOVA habla frase a frase mientras
+        el modelo sigue escribiendo.
+        """
         destino = os.path.join(
             tempfile.gettempdir(), f"nova_tts_{threading.get_ident()}.wav"
         )
         try:
-            motor = self._crear_motor()
-            motor.save_to_file(texto, destino)
-            motor.runAndWait()
-            del motor
+            if self._voz_onecore and self._onecore.sintetizar(texto, Path(destino)):
+                pass
+            else:
+                motor = self._crear_motor()
+                motor.save_to_file(texto, destino)
+                motor.runAndWait()
+                del motor
 
             with wave.open(destino, "rb") as w:
                 sr = w.getframerate()

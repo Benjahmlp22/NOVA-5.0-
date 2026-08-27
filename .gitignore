@@ -18,3 +18,7 @@ models/
 
 # Corpus de audio para bench_stt.py: grabaciones del usuario.
 bench/audio/
+
+# Muestras de voz generadas para comparar sintetizadores. Se regeneran
+# con bench/muestras_voz.py; son megas de WAV que no aportan al repo.
+muestras_voz/

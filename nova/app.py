@@ -44,7 +44,7 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
-from .tools import PendingConfirmation, apps, build_registry, memory, recordatorios
+from .tools import PendingConfirmation, apps, build_registry, memory, recordatorios, voz
 from .ui import Interfaz
 from .voice import Speaker, Transcriptor, VoiceListener, play_chime
 
@@ -291,6 +291,10 @@ class Nova(QObject):
         self._latido.timeout.connect(self._sincronizar_estado)
         self._latido.start(500)
         self.speaker.start()
+        # Las herramientas de voz necesitan el altavoz de verdad: quien
+        # cambia de voz es él, no el registro.
+        voz.conectar(self.speaker)
+        voz.aplicar_guardado(self.speaker)
 
         self.ui.mostrar()
 
