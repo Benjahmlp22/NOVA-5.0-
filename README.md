@@ -377,9 +377,30 @@ vez sólo mira lo nuevo: 0.1 s si no ha cambiado nada.
 **El escritorio no entra por defecto.** Aquí tiene 10.288 imágenes que
 son recursos de proyectos: dos tercios del tiempo a cambio de ruido.
 
-**Hay un umbral.** Sin él CLIP siempre devuelve algo — lo menos malo.
-Enseñar tres imágenes al azar con cara de acierto es peor que decir que
-no la tienes.
+**CLIP ordena bien, pero no sabe decir «no la tengo».** Esto salió de
+medirlo con las 3.793 imágenes ya indexadas, y cambió el diseño. Sus
+puntuaciones no son comparables entre consultas distintas:
+
+| consulta | puntuación | ¿existe? |
+|---|---|---|
+| `an underwater photo of a coral reef` | 0.266 | **no** |
+| `a screenshot of Minecraft` | 0.300 | sí |
+
+El z-score tampoco separa (4.28 para el coral contra 3.44 para
+Minecraft). El primer diseño tenía un umbral fijo de 0.24 y habría
+contestado `BlastTexture.png` a «búscame una foto de un perro» con toda
+la seguridad del mundo.
+
+Lo que sí funciona es usar CLIP como se usa bien: **comparando frases
+sobre la misma imagen**. Si `a photo of a dog` no le gana a `a photo of
+something else`, es que no hay ningún perro. Eso baja el perro a 0.075
+de confianza y deja Minecraft en 0.994.
+
+Tampoco es perfecto —`a screenshot of Excel` sigue en 0.944 sin que haya
+ninguna— así que **no se usa para filtrar en silencio**, sino para que
+NOVA diga si está segura. Con confianza alta afirma; con confianza baja
+dice «no estoy segura, pero lo que más se parece es…». Y enseña las
+candidatas igual: buscar una foto es mirar candidatas.
 
 **La descripción va en inglés.** CLIP se entrenó así y en español
 acierta bastante menos. No hay que traducir nada a mano: el modelo que
@@ -441,6 +462,7 @@ Con la configuración por defecto, medido con `nvidia-smi` y `psutil`:
 | Ollama `qwen3.5:4b` | 3.1 GB | residente con `NOVA_KEEP_ALIVE=24h` |
 | faster-whisper `small` | 365 MiB | `int8_float16` |
 | Vosk `es-0.42` | — | ~2.3 GB en RAM, no toca la GPU |
+| CLIP (buscar imágenes) | — | 607 MB en disco, corre en CPU |
 | escritorio de Windows | ~2.8 GB | navegador, juegos, etc. |
 
 Sobra sitio en una tarjeta de 12 GB **mientras no juegues**. En cuanto un
@@ -593,7 +615,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              413 tests, sin red ni micrófono
+tests/              414 tests, sin red ni micrófono
 ```
 
 ## Tests
