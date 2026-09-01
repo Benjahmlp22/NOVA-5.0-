@@ -148,9 +148,16 @@ class Config:
     remoto_auto: bool = field(default_factory=lambda: _env_bool("NOVA_REMOTO_AUTO", False))
 
     temperature: float = field(default_factory=lambda: float(_env("NOVA_TEMPERATURE", "0.6")))
-    # Tope de tokens generados: acota la latencia peor caso sin cortar
-    # frases a medias (con 200 se truncaban enumeraciones a mitad).
-    max_tokens: int = field(default_factory=lambda: int(_env("NOVA_MAX_TOKENS", "350")))
+    # Tope de tokens generados. Es un TECHO, no un objetivo: una
+    # respuesta hablada normal usa 40-80 y no tarda más por tenerlo alto.
+    #
+    # Subido de 350 a 2048 el 01/09, y no por capricho: con 350 la
+    # herramienta de escribir código era inútil. El contenido del archivo
+    # son tokens generados, así que un juego en HTML se cortaba a la
+    # cuarta línea y NOVA escribía un archivo roto creyendo que lo había
+    # hecho bien. Lo que se dice en alto lo sigue acotando
+    # `recortar_para_voz`, que es donde tiene que estar.
+    max_tokens: int = field(default_factory=lambda: int(_env("NOVA_MAX_TOKENS", "2048")))
     # La ventana de contexto que se le pide a Ollama.
     #
     # BUG DE FONDO encontrado el 27/08: nunca se había fijado. Ollama usa
@@ -162,11 +169,16 @@ class Config:
     # pedido. Confirmado forzando num_ctx=8192 en la misma petición: ahí
     # sí acertó (app_close, Spotify).
     #
-    # 8192 cabe de sobra: sistema + catálogo + historial de 12 turnos +
-    # una ronda de herramientas no ha llegado a acercarse, y en VRAM
-    # cuesta 280 MB medidos (3.06 GB a 2048 contra 3.34 GB a 8192) —
-    # nada, sobra en una tarjeta de 12 GB.
-    num_ctx: int = field(default_factory=lambda: int(_env("NOVA_NUM_CTX", "8192")))
+    # 8192 cabía de sobra para hablar: sistema + catálogo + historial de
+    # 12 turnos + una ronda de herramientas no llegaba a acercarse, y en
+    # VRAM cuesta 280 MB medidos (3.06 GB a 2048 contra 3.34 GB a 8192).
+    #
+    # Subido a 16384 el 01/09 para poder leer código de verdad. Un
+    # archivo de 20.000 caracteres son ~6.000 tokens: con 8192 no cabía
+    # el archivo Y el resto del prompt a la vez, así que "léete esto y
+    # dime qué falla" era imposible por construcción. El coste es otro
+    # medio giga de VRAM; cuando no lo haya, el modo ligero ya se encarga.
+    num_ctx: int = field(default_factory=lambda: int(_env("NOVA_NUM_CTX", "16384")))
     # Rondas del bucle de herramientas antes de forzar un cierre.
     max_rounds: int = field(default_factory=lambda: int(_env("NOVA_MAX_ROUNDS", "4")))
     request_timeout: float = field(default_factory=lambda: float(_env("NOVA_TIMEOUT", "120")))
@@ -208,15 +220,30 @@ class Config:
     max_enunciado_s: float = field(default_factory=lambda: float(_env("NOVA_MAX_ENUNCIADO", "12")))
     mic_exclusive: bool = field(default_factory=lambda: _env_bool("NOVA_MIC_EXCLUSIVO", False))
     # Cuánto se le puede seguir hablando sin repetir el nombre después de
-    # que ella conteste. Ocho segundos es el hueco de un turno normal.
-    # Con los veinte del timeout de sueño, NOVA procesaba como órdenes
-    # todo lo que se dijera en la habitación durante ese rato.
-    seguimiento_s: float = field(default_factory=lambda: float(_env("NOVA_SEGUIMIENTO", "8")))
+    # que ella conteste.
+    #
+    # Estaba en 8 s, que es el hueco de UN turno, y la queja de Benja el
+    # 01/09 fue justo ésa: «que no se calle la conversación, que me deje
+    # seguir a menos que le diga adiós». Ocho segundos son los que tardas
+    # en pensar la siguiente frase, así que a la segunda ya tenías que
+    # volver a decir «nova».
+    #
+    # 35 s es una conversación de verdad. Lo que antes protegía este
+    # número —que no procese como órdenes lo que se diga en la
+    # habitación— ya lo hacen dos filtros que entonces no existían: el
+    # `creible` de Whisper descarta lo que no es habla, y las frases de
+    # menos de dos palabras se ignoran. Y sigue cerrándose al oír una
+    # despedida, que es como se cierra una conversación de verdad.
+    seguimiento_s: float = field(default_factory=lambda: float(_env("NOVA_SEGUIMIENTO", "35")))
     # Poder cortarla hablando por encima. Con altavoces en vez de cascos,
     # si NOVA se interrumpe a sí misma por su propio eco, ponlo a false.
     interrumpir: bool = field(default_factory=lambda: _env_bool("NOVA_INTERRUMPIR", True))
     # Segundos de silencio tras despertar antes de volver a dormir.
-    awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "20")))
+    # Subido de 20 a 120 por el mismo motivo que `seguimiento_s`: en una
+    # conversación con pausas, dormirse a los veinte segundos obliga a
+    # despertarla otra vez a mitad de charla. Se sigue durmiendo al oír
+    # una despedida, y ahí es inmediato.
+    awake_timeout_s: float = field(default_factory=lambda: float(_env("NOVA_AWAKE_TIMEOUT", "120")))
     # Cuánto aguanta despierta cuando ha preguntado algo y espera tu
     # respuesta. Un minuto: lo que tardas en mirar la pantalla, pensarlo
     # y contestar. Los 20 s normales se le quedaban cortos justo cuando

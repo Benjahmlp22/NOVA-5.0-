@@ -113,6 +113,11 @@ class AgentReply:
     # Si la respuesta ya se fue diciendo en voz alta mientras se
     # generaba, quien reciba esto NO debe volver a decirla.
     ya_dicho: bool = False
+    # (herramienta, lo que devolvió) de las que salieron bien. Se guarda
+    # en la conversación para que al turno siguiente el modelo sepa que
+    # eso YA lo miró — sin esto volvía a buscar lo mismo una y otra vez.
+    # Ver `Conversation.apuntar`.
+    resultados: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def pending(self) -> PendingConfirmation | None:
@@ -224,6 +229,7 @@ class Agent:
             else self.tools.llm_schemas(exclude=set(LLM_HIDDEN))
         )
         used: list[str] = []
+        resultados: list[tuple[str, str]] = []
 
         for round_n in range(1, self.max_rounds + 1):
             self._status("thinking" if round_n == 1 else "reasoning")
@@ -249,6 +255,7 @@ class Agent:
                     tools_used=used,
                     rounds=round_n,
                     ya_dicho=bool(emisor and emisor.dijo_algo),
+                    resultados=resultados,
                 )
 
             messages.append(
@@ -287,6 +294,7 @@ class Agent:
                 if outcome.ok:
                     used.append(tool.name)
                     hechas.append(outcome.message)
+                    resultados.append((tool.name, outcome.message))
                     directas = directas and tool.responde_sola
                 else:
                     directas = False
@@ -306,7 +314,8 @@ class Agent:
                 # acaso se oye "voy a mirarlo. Ocupa 1.8 gigas", que es
                 # exactamente lo que diría una persona.
                 return AgentReply(text=" ".join(hechas), tools_used=used,
-                                  rounds=round_n, ya_dicho=False)
+                                  rounds=round_n, ya_dicho=False,
+                                  resultados=resultados)
 
             if aplazadas:
                 self._status("waiting")
@@ -315,6 +324,7 @@ class Agent:
                     tools_used=used,
                     pendientes=aplazadas,
                     rounds=round_n,
+                    resultados=resultados,
                 )
 
         # Se acabaron las rondas y el modelo seguía pidiendo herramientas.
@@ -330,7 +340,8 @@ class Agent:
             text = pulir(final.text)
         except OllamaError as exc:
             text = str(exc)
-        return AgentReply(text=text, tools_used=used, rounds=self.max_rounds)
+        return AgentReply(text=text, tools_used=used, rounds=self.max_rounds,
+                          resultados=resultados)
 
     def confirm(self, pending: PendingConfirmation) -> ToolResult:
         """Ejecuta lo que quedó pendiente tras el «sí» del usuario."""

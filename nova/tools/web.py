@@ -19,6 +19,8 @@ from __future__ import annotations
 import html
 import logging
 import re
+import time
+import unicodedata
 
 from .registry import Risk, Tool, ToolResult
 
@@ -41,6 +43,69 @@ MAX_RESULTADOS = 3
 # larga cansa; y todo esto entra en el prompt del modelo, que se paga en
 # latencia.
 MAX_CARACTERES = 220
+
+
+# ── Caché de búsquedas ───────────────────────────────────────────────
+#
+# Buscar lo mismo dos veces en la misma tarde es la queja que más se
+# repitió probándola: «le dije búscame quién ganó el mundial, y al
+# volverle a hablar lo buscó otra vez». Aquí se ataca por los dos lados
+# a la vez — la segunda vez es instantánea (0 s contra los 2-5 s de
+# salir a la red) y contesta EXACTAMENTE lo mismo, que es lo que hace
+# que parezca que se acuerda.
+#
+# Quince minutos: lo justo para una conversación entera. Un precio o un
+# resultado no cambian en ese rato, y si de verdad cambian, Benja puede
+# decir "compruébalo otra vez" — eso llega con `refrescar`.
+CACHE_S = 15 * 60
+_cache: dict[str, tuple[float, str]] = {}
+
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _clave_cache(consulta: str) -> str:
+    """La consulta reducida a sus palabras, sin tildes y en orden fijo.
+
+    «¿Quién ganó el Mundial?» y «quien gano el mundial» son la misma
+    pregunta, y hablando salen las dos: Whisper pone las tildes unas
+    veces sí y otras no. Sin quitarlas, la caché fallaba justo en el caso
+    para el que se escribió — medido: la segunda consulta salía otra vez
+    a la red y tardaba 1.75 s.
+
+    Y ordenadas, porque «mundial quién ganó» es también la misma.
+    """
+    claves = {_sin_tildes(p) for p in _palabras_clave(consulta)}
+    return " ".join(sorted(claves)) or _sin_tildes(_limpiar(consulta).lower())
+
+
+def _de_la_cache(consulta: str) -> str | None:
+    guardado = _cache.get(_clave_cache(consulta))
+    if guardado is None:
+        return None
+    cuando, respuesta = guardado
+    if time.monotonic() - cuando > CACHE_S:
+        _cache.pop(_clave_cache(consulta), None)
+        return None
+    return respuesta
+
+
+def _a_la_cache(consulta: str, respuesta: str) -> None:
+    _cache[_clave_cache(consulta)] = (time.monotonic(), respuesta)
+    # Sin tope crecería toda la sesión. Cien búsquedas distintas en
+    # quince minutos no pasa, pero un bucle sí podría.
+    if len(_cache) > 100:
+        mas_viejo = min(_cache, key=lambda k: _cache[k][0])
+        _cache.pop(mas_viejo, None)
+
+
+def olvidar_busquedas() -> None:
+    """Tira la caché. Para cuando se pide comprobar algo otra vez."""
+    _cache.clear()
 
 
 def _limpiar(texto: str) -> str:
@@ -245,6 +310,13 @@ def buscar(query: str, max_resultados: int = MAX_RESULTADOS) -> ToolResult:
     if not consulta:
         return ToolResult(ok=False, message="¿Qué quieres que busque?")
 
+    if (guardado := _de_la_cache(consulta)) is not None:
+        # Instantáneo, y sobre todo: la MISMA respuesta. Preguntar dos
+        # veces lo mismo y que conteste cosas distintas es lo que hacía
+        # que pareciera que no se enteraba.
+        log.info("«%s» ya estaba buscado; contesto sin salir a la red", consulta)
+        return ToolResult(ok=True, message=guardado, data={"cache": True})
+
     try:
         from ddgs import DDGS
     except ImportError:
@@ -309,9 +381,11 @@ def buscar(query: str, max_resultados: int = MAX_RESULTADOS) -> ToolResult:
         if detalle:
             log.info("entré en la página para sacar el dato")
 
+    respuesta = redactar(consulta, crudos, max_resultados, detalle=detalle)
+    _a_la_cache(consulta, respuesta)
     return ToolResult(
         ok=True,
-        message=redactar(consulta, crudos, max_resultados, detalle=detalle),
+        message=respuesta,
         data={"query": consulta, "resultados": len(crudos), "profundizo": bool(detalle)},
     )
 

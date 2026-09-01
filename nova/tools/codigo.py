@@ -70,7 +70,13 @@ _NO_ENTRAR = frozenset({
 # Cuánto texto se le pasa al modelo. Un traceback entero son 40 líneas de
 # las que importan tres, y el contexto de un modelo local se paga caro.
 LINEAS_SALIDA = 25
-CARACTERES_ARCHIVO = 6000
+
+# Cuánto archivo se lee de una vez. 6000 caracteres se quedaban en medio
+# módulo: «léete esto y dime qué falla» acababa opinando sobre la mitad
+# de arriba. 20.000 son ~6.000 tokens, que con num_ctx en 16384 caben
+# junto al resto del prompt. Para lo que no quepa está el rango de
+# líneas de `ver`.
+CARACTERES_ARCHIVO = 20000
 
 
 # ── Encontrar el proyecto ────────────────────────────────────────────
@@ -117,8 +123,21 @@ def proyectos() -> dict[str, Path]:
     return encontrados
 
 
-def _resolver(nombre: str) -> Path | None:
-    """La carpeta que Benja quiere decir. Tolerante: lo dijo hablando."""
+def _resolver(nombre: str, estricto: bool = False) -> Path | None:
+    """La carpeta que Benja quiere decir. Tolerante: lo dijo hablando.
+
+    `estricto` quita la mitad peligrosa de la tolerancia, y hace falta.
+    Probándolo en vivo, «hazme un juego en un proyecto que se llame
+    **serpiente-nova**» acabó escribiendo dentro del proyecto **NOVA**:
+    normalizado, "nova" está contenido en "serpientenova", así que el
+    emparejamiento flojo lo dio por bueno. Para leer eso es una comodidad;
+    para escribir es meterle un archivo a un proyecto que no tocaba.
+
+    Así que al escribir sólo vale el nombre exacto o que lo dicho sea
+    parte del nombre del proyecto ("nodika" → "nodika-motor"), nunca al
+    revés. Si no encaja, no hay proyecto: se creará uno nuevo, que es lo
+    que se había pedido.
+    """
     clave = _normalizar(nombre)
     if not clave:
         return None
@@ -127,7 +146,10 @@ def _resolver(nombre: str) -> Path | None:
         return todos[clave]
     # Por trozos: "nodika" encuentra "nodika-motor", y "battle dither"
     # encuentra "battle-dither" porque el normalizado quita el guion.
-    candidatos = [ruta for k, ruta in todos.items() if clave in k or k in clave]
+    candidatos = [
+        ruta for k, ruta in todos.items()
+        if clave in k or (not estricto and k in clave)
+    ]
     if len(candidatos) == 1:
         return candidatos[0]
     if candidatos:
@@ -194,8 +216,15 @@ def listar(nombre: str = "") -> ToolResult:
     )
 
 
-def ver(proyecto: str, archivo: str) -> ToolResult:
-    """El contenido de un archivo, para poder hablar de él."""
+def ver(proyecto: str, archivo: str, desde: int = 0, hasta: int = 0) -> ToolResult:
+    """El contenido de un archivo, para poder hablar de él.
+
+    Con `desde`/`hasta` se lee un tramo por número de línea. Es la salida
+    para los archivos que no caben enteros: en vez de darle al modelo los
+    primeros 20.000 caracteres y ya, se le puede pedir «de la 400 a la
+    600» y seguir leyendo. Las líneas van numeradas por eso mismo: sin
+    número, pedir el tramo siguiente es adivinar.
+    """
     carpeta = _resolver(proyecto)
     if carpeta is None:
         return _no_lo_encuentro(proyecto)
@@ -232,13 +261,35 @@ def ver(proyecto: str, archivo: str) -> ToolResult:
     except OSError as exc:
         return ToolResult(ok=False, message=f"No pude leerlo: {exc}")
 
-    lineas = texto.count("\n") + 1
-    recortado = texto[:CARACTERES_ARCHIVO]
-    if len(texto) > CARACTERES_ARCHIVO:
-        recortado += "\n... (recortado)"
+    todas = texto.splitlines()
+    lineas = len(todas)
+
+    if desde or hasta:
+        principio = max(1, int(desde or 1))
+        final = min(lineas, int(hasta) if hasta else lineas)
+        if principio > lineas:
+            return ToolResult(
+                ok=False,
+                message=f"{destino.name} sólo tiene {lineas} líneas.",
+                data={"lineas": lineas},
+            )
+        tramo = todas[principio - 1:final]
+        cuerpo = "\n".join(f"{principio + i}: {ln}" for i, ln in enumerate(tramo))
+        cabecera = (f"{destino.name}, líneas {principio}-{final} "
+                    f"de {lineas}:")
+    else:
+        cuerpo = "\n".join(f"{i}: {ln}" for i, ln in enumerate(todas, 1))
+        cabecera = f"{destino.name}, {lineas} líneas:"
+
+    if len(cuerpo) > CARACTERES_ARCHIVO:
+        cortado = cuerpo[:CARACTERES_ARCHIVO].rsplit("\n", 1)[0]
+        ultima = cortado.rsplit("\n", 1)[-1].split(":", 1)[0]
+        cuerpo = (f"{cortado}\n... (cortado en la línea {ultima} de {lineas}; "
+                  f"pídeme el tramo siguiente con desde y hasta)")
+
     return ToolResult(
         ok=True,
-        message=f"{destino.name}, {lineas} líneas:\n\n{recortado}",
+        message=f"{cabecera}\n\n{cuerpo}",
         data={"ruta": str(destino), "lineas": lineas},
     )
 
@@ -287,6 +338,107 @@ def buscar(proyecto: str, texto: str) -> ToolResult:
         ok=True,
         message=f"«{texto}» sale en {cuenta} de {carpeta.name}: {primeros}{cola}.",
         data={"hallazgos": hallazgos},
+    )
+
+
+# ── Escribir ─────────────────────────────────────────────────────────
+#
+# Hasta el 01/09 NOVA contestaba «no sé programar ni hacer juegos», y era
+# verdad: sabía LEER proyectos y ejecutarlos, pero no tenía forma de
+# crear un archivo fuera de `workspace/`. Pedirle un juego en HTML
+# terminaba en una carpeta vacía.
+
+# Lo que se deja escribir. No es paranoia: es que un modelo hablando por
+# un micrófono no tiene por qué poder dejar un .exe o un .bat en el
+# disco. Texto y código, y punto.
+_EXTENSIONES = frozenset({
+    ".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".json",
+    ".py", ".md", ".txt", ".svg", ".lua", ".cs", ".rs", ".go", ".c", ".h",
+    ".cpp", ".java", ".yml", ".yaml", ".toml", ".ini", ".csv", ".glsl",
+})
+
+
+def escribir(proyecto: str, archivo: str, contenido: str,
+             sobrescribir: bool = False) -> ToolResult:
+    """Crea o reemplaza un archivo de código dentro de un proyecto.
+
+    Si el proyecto no existe, se crea: «hazme un juego de la serpiente»
+    no puede exigir que la carpeta ya estuviera.
+
+    No sobrescribe por defecto. Un modelo que se equivoca de nombre y
+    machaca el `index.html` de un proyecto de verdad es un fallo del que
+    no se vuelve, y aquí no hay control de versiones que lo salve.
+    """
+    nombre_archivo = (archivo or "").strip().replace("\\", "/").lstrip("/")
+    if not nombre_archivo:
+        return ToolResult(ok=False, message="¿Cómo quieres que se llame el archivo?")
+    if Path(nombre_archivo).suffix.lower() not in _EXTENSIONES:
+        return ToolResult(
+            ok=False,
+            message=f"No escribo archivos «{Path(nombre_archivo).suffix}». "
+                    "Sólo código y texto.",
+        )
+
+    # Estricto: escribir en el proyecto equivocado es peor que crear uno
+    # de más. Ver el docstring de `_resolver`.
+    carpeta = _resolver(proyecto, estricto=True)
+    creado_ahora = False
+    if carpeta is None:
+        # Proyecto nuevo. Se crea en la raíz, que es donde Benja ya tiene
+        # varios sueltos; meterlo en una de sus carpetas numeradas sería
+        # adivinar en cuál.
+        limpio = re.sub(r"[^\w\- ]+", "", proyecto or "").strip()
+        if not limpio:
+            return ToolResult(ok=False, message="¿Cómo se llama el proyecto?")
+        carpeta = CONFIG.proyectos_dir / limpio
+        carpeta.mkdir(parents=True, exist_ok=True)
+        creado_ahora = True
+
+    destino = carpeta / nombre_archivo
+    if not _dentro(destino):
+        return ToolResult(ok=False, message="Esa ruta se sale de tus proyectos.")
+    if destino.exists() and not sobrescribir:
+        return ToolResult(
+            ok=False,
+            message=f"Ya existe {nombre_archivo} en {carpeta.name}. "
+                    "Dime que lo sobrescriba si quieres reemplazarlo.",
+        )
+
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(contenido or "", encoding="utf-8")
+    except OSError as exc:
+        return ToolResult(ok=False, message=f"No pude escribirlo: {exc}")
+
+    lineas = len((contenido or "").splitlines()) or 1
+    hecho = "He creado el proyecto y" if creado_ahora else "He"
+    return ToolResult(
+        ok=True,
+        message=f"{hecho} escrito {nombre_archivo} en {carpeta.name}, {lineas} líneas.",
+        data={"ruta": str(destino), "proyecto": carpeta.name, "lineas": lineas},
+    )
+
+
+def abrir(proyecto: str, archivo: str = "index.html") -> ToolResult:
+    """Abre un archivo del proyecto en el navegador. Para verlo funcionar."""
+    carpeta = _resolver(proyecto)
+    if carpeta is None:
+        return _no_lo_encuentro(proyecto)
+    destino = carpeta / (archivo or "index.html").strip()
+    if not destino.is_file() or not _dentro(destino):
+        return ToolResult(
+            ok=False, message=f"No encuentro «{archivo}» en {carpeta.name}."
+        )
+    try:
+        import webbrowser
+
+        webbrowser.open(destino.as_uri())
+    except Exception as exc:  # noqa: BLE001
+        return ToolResult(ok=False, message=f"No pude abrirlo: {exc}")
+    return ToolResult(
+        ok=True,
+        message="Te lo he abierto en el navegador.",
+        data={"ruta": str(destino)},
     )
 
 
@@ -631,13 +783,18 @@ def register(reg) -> None:  # noqa: ANN001
     ))
     reg.register(Tool(
         name="codigo.ver",
-        description="Lee un archivo de código de un proyecto suyo para poder hablar de él",
+        description=(
+            "Lee un archivo de código de un proyecto suyo, con las líneas numeradas. "
+            "Si es largo y te lo cortan, pide el tramo siguiente con desde y hasta"
+        ),
         handler=ver,
         schema={
             "type": "object",
             "properties": {
                 "proyecto": {"type": "string"},
                 "archivo": {"type": "string"},
+                "desde": {"type": "integer"},
+                "hasta": {"type": "integer"},
             },
             "required": ["proyecto", "archivo"],
         },
@@ -656,6 +813,43 @@ def register(reg) -> None:  # noqa: ANN001
             "required": ["proyecto", "texto"],
         },
         risk=Risk.SAFE,
+        responde_sola=True,
+    ))
+    reg.register(Tool(
+        name="codigo.escribir",
+        description=(
+            "ESCRIBE código: crea o reemplaza un archivo dentro de un proyecto suyo, "
+            "y crea el proyecto si no existe. Es la de «hazme un juego en HTML», "
+            "«créame una página», «escribe un script». Tú generas el contenido entero"
+        ),
+        handler=escribir,
+        schema={
+            "type": "object",
+            "properties": {
+                "proyecto": {"type": "string"},
+                "archivo": {"type": "string"},
+                "contenido": {"type": "string"},
+                "sobrescribir": {"type": "boolean"},
+            },
+            "required": ["proyecto", "archivo", "contenido"],
+        },
+        risk=Risk.MEDIUM,
+        responde_sola=True,
+        resumir=lambda a: f"escribir {a.get('archivo', '?')} en {a.get('proyecto', '?')}",
+    ))
+    reg.register(Tool(
+        name="codigo.abrir",
+        description="Abre en el navegador un archivo de un proyecto suyo, para verlo funcionar",
+        handler=abrir,
+        schema={
+            "type": "object",
+            "properties": {
+                "proyecto": {"type": "string"},
+                "archivo": {"type": "string"},
+            },
+            "required": ["proyecto"],
+        },
+        risk=Risk.MEDIUM,
         responde_sola=True,
     ))
     reg.register(Tool(

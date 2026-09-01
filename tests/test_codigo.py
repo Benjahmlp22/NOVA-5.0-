@@ -239,3 +239,124 @@ def test_un_assert_que_falla_tambien_se_reconoce():
 def test_si_no_reconoce_nada_dice_lo_que_haya():
     """Peor que leer de más es no decir nada."""
     assert codigo._por_que_falla("se rompió y no sé por qué") == "se rompió y no sé por qué"
+
+
+# ── Escribir código ──────────────────────────────────────────────────
+#
+# Hasta el 01/09 NOVA contestaba «no sé programar ni hacer juegos», y era
+# verdad: no tenía forma de crear un archivo fuera de workspace/. Pedirle
+# un juego terminaba en una carpeta vacía.
+
+def test_escribe_un_archivo_en_un_proyecto_que_ya_existe(proyectos):
+    r = codigo.escribir("conversor", "juego.html", "<canvas id='j'></canvas>")
+    assert r.ok
+    assert (proyectos / "09_Scripts" / "conversor" / "juego.html").is_file()
+
+
+def test_crea_el_proyecto_si_no_existe(proyectos):
+    """«hazme un juego de la serpiente» no puede exigir que ya hubiera carpeta."""
+    r = codigo.escribir("serpiente", "index.html", "<h1>snake</h1>")
+    assert r.ok
+    assert "He creado el proyecto" in r.message
+    assert (proyectos / "serpiente" / "index.html").read_text(encoding="utf-8") == "<h1>snake</h1>"
+
+
+def test_no_machaca_nada_sin_permiso(proyectos):
+    """Un modelo que se equivoca de nombre y borra tu index.html es un
+    fallo del que no se vuelve: aquí no hay git que lo salve."""
+    r = codigo.escribir("battle dither", "index.html", "otra cosa")
+    assert not r.ok
+    assert "Ya existe" in r.message
+    # Y el original sigue intacto.
+    original = (proyectos / "01_Juegos_Web" / "battle-dither" / "index.html")
+    assert "hola" in original.read_text(encoding="utf-8")
+
+
+def test_sobrescribe_si_se_lo_dicen(proyectos):
+    r = codigo.escribir("battle dither", "index.html", "nuevo", sobrescribir=True)
+    assert r.ok
+    original = (proyectos / "01_Juegos_Web" / "battle-dither" / "index.html")
+    assert original.read_text(encoding="utf-8") == "nuevo"
+
+
+def test_no_escribe_ejecutables(proyectos):
+    """Un modelo hablando por un micro no deja un .bat en el disco."""
+    for malo in ("virus.exe", "cosa.bat", "algo.ps1", "x.dll"):
+        r = codigo.escribir("conversor", malo, "lo que sea")
+        assert not r.ok, malo
+        assert "Sólo código y texto" in r.message
+
+
+def test_escribir_tampoco_se_sale_de_la_carpeta(proyectos, tmp_path):
+    r = codigo.escribir("conversor", "../../../../fuera.html", "<h1>no</h1>")
+    assert not r.ok
+    assert not (tmp_path.parent / "fuera.html").exists()
+
+
+# ── Leer mucho código ────────────────────────────────────────────────
+
+def test_ver_numera_las_lineas(proyectos):
+    """Sin número, pedir el tramo siguiente es adivinar."""
+    r = codigo.ver("battle dither", "index.html")
+    assert r.ok
+    assert "1: <h1>hola</h1>" in r.message
+
+
+def test_ver_un_tramo_concreto(proyectos):
+    r = codigo.ver("battle dither", "index.html", desde=2, hasta=2)
+    assert r.ok
+    assert "2: const jugador = 1;" in r.message
+    assert "hola" not in r.message
+    assert "líneas 2-2 de 2" in r.message
+
+
+def test_pedir_un_tramo_que_no_existe_lo_dice(proyectos):
+    r = codigo.ver("battle dither", "index.html", desde=500)
+    assert not r.ok
+    assert "sólo tiene 2 líneas" in r.message
+
+
+def test_un_archivo_enorme_dice_dónde_se_cortó(proyectos, monkeypatch):
+    """Para poder pedir el tramo siguiente en vez de opinar sobre la mitad."""
+    monkeypatch.setattr(codigo, "CARACTERES_ARCHIVO", 200)
+    largo = proyectos / "09_Scripts" / "conversor" / "largo.py"
+    largo.write_text("\n".join(f"linea_{i} = {i}" for i in range(1, 300)), encoding="utf-8")
+
+    r = codigo.ver("conversor", "largo.py")
+    assert r.ok
+    assert r.data["lineas"] == 299
+    assert "cortado en la línea" in r.message
+    assert "desde y hasta" in r.message
+
+
+def test_al_escribir_no_vale_un_parecido_lejano(proyectos):
+    """El fallo en vivo: «un proyecto que se llame serpiente-nova»
+    acabó escribiendo dentro del proyecto NOVA, porque normalizado
+    "nova" está contenido en "serpientenova"."""
+    nova_vieja = proyectos / "NOVA"
+    nova_vieja.mkdir()
+    (nova_vieja / "main.py").write_text("# proyecto de verdad", encoding="utf-8")
+
+    # Leyendo, el emparejamiento flojo es una comodidad.
+    assert codigo._resolver("nova").name == "NOVA"
+    # Escribiendo, no: «serpiente-nova» NO es «NOVA».
+    assert codigo._resolver("serpiente-nova", estricto=True) is None
+
+    r = codigo.escribir("serpiente-nova", "index.html", "<h1>snake</h1>")
+    assert r.ok
+    assert "He creado el proyecto" in r.message
+    assert (proyectos / "serpiente-nova" / "index.html").is_file()
+    # Y el proyecto que ya existía se queda como estaba.
+    assert not (nova_vieja / "index.html").exists()
+
+
+def test_lo_que_si_encaja_sigue_encajando_al_escribir(proyectos):
+    """«nodika» tiene que seguir encontrando «nodika-motor»."""
+    (proyectos / "01_Juegos_Web" / "nodika-motor").mkdir()
+    (proyectos / "01_Juegos_Web" / "nodika-motor" / "package.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    r = codigo.escribir("nodika", "nuevo.js", "console.log(1)")
+    assert r.ok
+    assert "He creado el proyecto" not in r.message
+    assert (proyectos / "01_Juegos_Web" / "nodika-motor" / "nuevo.js").is_file()

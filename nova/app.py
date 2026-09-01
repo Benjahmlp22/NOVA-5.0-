@@ -186,9 +186,16 @@ class _Worker(QObject):
         # activar uno en el panel se nota en la frase siguiente, sin
         # reiniciar NOVA.
         extra = self.plugins.personalidad() if self.plugins else ""
-        prompt = build_system_prompt(self.awareness.snapshot(), memory.para_prompt(), extra)
+        # Los apuntes son lo que las herramientas ya averiguaron en esta
+        # conversación. Sin ellos NOVA volvía a buscar lo mismo cada vez
+        # que se le hablaba del tema. Ver `Conversation.apuntar`.
+        prompt = build_system_prompt(
+            self.awareness.snapshot(), memory.para_prompt(), extra, self.conv.apuntes()
+        )
         respuesta = self.agent.run(prompt, self.conv.history(), mensaje)
 
+        for herramienta, resultado in respuesta.resultados:
+            self.conv.apuntar(herramienta, resultado)
         self.conv.add_user(mensaje)
         if respuesta.pendientes:
             # El texto ya cuenta lo que se hizo Y pregunta por lo que
@@ -204,6 +211,8 @@ class _Worker(QObject):
         # Mismo motivo que en `procesar`: esto también es un slot.
         try:
             resultado = self.agent.confirm(pendiente)
+            if resultado.ok:
+                self.conv.apuntar(pendiente.tool, resultado.message)
             self.conv.add_assistant(resultado.message)
             self.listo.emit(resultado.message, [pendiente.tool], False)
         except Exception:

@@ -32,6 +32,17 @@ Lo que queda de aquello, y conviene no quitar:
   turno roto contesta y libera `_ocupada` en vez de matar el proceso y
   dejar a NOVA diciendo "todavía estoy con lo anterior" para siempre.
 
+### Ojo: los valores que mandan están en `.env`, no en `config.py`
+
+Perdido un rato el 01/09 por esto. `config.py` lleva los defaults **con
+sus porqués medidos**, pero `load_dotenv()` hace que `.env` gane. Cuatro
+cambios de configuración (tokens, contexto, seguimiento, timeout de
+sueño) quedaron inertes en la app real mientras los tests pasaban, y no
+se vio hasta probarla hablando.
+
+Al tocar un default hay que tocar los tres sitios: `config.py`, `.env` y
+`.env.example`.
+
 ### Conseguir la clave del cerebro rápido (5 minutos, gratis)
 
 Es lo único que hace falta hacer a mano para que el «modo rápido»
