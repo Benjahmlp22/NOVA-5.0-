@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA 5 — asistente de voz local para Windows</title>
+
+<meta name="description" content="Asistente de escritorio por voz para Windows. Local y gratis: ni API keys, ni suscripciones, ni datos saliendo del PC. Todavía sin descarga.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0b0d">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="NOVA 5 — asistente de voz local">
+<meta property="og:description" content="Dices «NOVA», te escucha y hace lo que le pides. Sin nube.">
+
+<!-- Los tokens primero: todo lo demás los usa. Y en este orden,
+     que es de lo general a lo concreto. -->
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/componentes.css">
+
+<!-- `defer` para no bloquear el pintado. Con módulos es implícito,
+     pero escribirlo evita que alguien lo quite sin saberlo. -->
+<script type="module" src="js/main.js" defer></script>
+</head>
+
+<body>
+<!-- Grano y viñeta. Decorativo puro: fuera del árbol de accesibilidad. -->
+<div class="pelicula" aria-hidden="true"></div>
+
+<a class="oculto-visualmente" href="#contenido">Saltar al contenido</a>
+
+<header class="barra contenedor" data-componente="barra">
+  <a class="barra__marca" href="#contenido">
+    <span class="barra__punto" aria-hidden="true"></span>
+    NOVA&nbsp;5
+  </a>
+  <nav class="barra__enlaces" aria-label="Secciones">
+    <a class="barra__enlace" href="#que-es">Qué es</a>
+    <a class="barra__enlace" href="#capaz">Qué hace</a>
+    <a class="barra__enlace" href="#medido">Medido</a>
+    <a class="barra__enlace" href="#descarga">Descarga</a>
+    <a class="barra__enlace" href="https://github.com/Benjahmlp22/NOVA-5.0-"
+       rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<main id="contenido">
+
+  <!-- ── Portada ──────────────────────────────────────────────── -->
+  <section class="portada contenedor">
+    <p class="micro">Asistente de escritorio por voz · Windows</p>
+
+    <div class="portada__centro">
+      <div>
+        <h1 class="titular">
+          Dices Nova.
+          <span class="titular__eco">Te escucha.</span>
+        </h1>
+
+        <p class="entradilla">
+          Un asistente que vive en tu PC y hace cosas de verdad: abre
+          programas, ordena tus descargas, lee lo que hay en pantalla y
+          encuentra una imagen por lo que se ve en ella.
+          <strong>Todo en tu máquina.</strong> Ni API keys, ni
+          suscripciones, ni datos saliendo de tu ordenador.
+        </p>
+
+        <p style="margin-top: var(--gap-m)">
+          <span class="etiqueta etiqueta--aviso">En obras · sin descarga todavía</span>
+        </p>
+      </div>
+
+      <div class="orbe" data-componente="orbe">
+        <canvas class="orbe__lienzo" width="380" height="380"
+                role="img"
+                aria-label="El orbe de NOVA: cinco barras que cambian de color según esté escuchando, pensando o hablando."></canvas>
+      </div>
+    </div>
+
+    <p class="micro">Ollama · Vosk · faster-whisper · 100 % local</p>
+  </section>
+
+  <!-- ── Qué es ───────────────────────────────────────────────── -->
+  <section class="seccion contenedor" id="que-es">
+    <div class="seccion__cabecera">
+      <span class="seccion__numero">01</span>
+      <h2 class="seccion__titulo">Qué es</h2>
+    </div>
+
+    <div class="dos-columnas">
+      <div data-revelar>
+        <p class="entradilla" style="margin-top:0">
+          NOVA se queda escuchando su nombre en segundo plano. Cuando lo
+          dices, se enciende un borde en la pantalla, te oye, decide qué
+          herramienta necesita y lo hace. Después sigue escuchando, sin
+          que tengas que repetir su nombre en cada frase.
+        </p>
+        <p class="entradilla">
+          Lo que la separa de los asistentes de siempre es dónde ocurre
+          todo: <strong>en tu ordenador</strong>. El modelo de lenguaje
+          corre en tu GPU con Ollama, el reconocimiento de voz también.
+          No hay servidor al que mandar tu micrófono.
+        </p>
+      </div>
+
+      <figure class="demo" data-componente="demo" data-revelar>
+        <figcaption class="demo__cabecera">
+          <span>Ejemplo</span>
+          <span class="demo__estado" data-estado="escucha">escucha</span>
+        </figcaption>
+        <div class="demo__cuerpo"></div>
+        <figcaption class="micro"
+                    style="padding: 0 0.9rem 0.9rem; text-transform: none; letter-spacing: 0">
+          Reproducción escrita de una conversación real. Esta página no
+          ejecuta NOVA ni usa tu micrófono.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ── Qué hace ─────────────────────────────────────────────── -->
+  <section class="seccion contenedor seccion--diferida" id="capaz">
+    <div class="seccion__cabecera">
+      <span class="seccion__numero">02</span>
+      <h2 class="seccion__titulo">Qué sabe hacer</h2>
+    </div>
+
+    <ul class="rejilla rejilla--3">
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">01</span>
+        <h3 class="tarjeta__titulo">Programas y ventanas</h3>
+        <p class="tarjeta__texto">
+          Abre y cierra aplicaciones, trae al frente una ventana que ya
+          tenías abierta, las minimiza todas de golpe.
+        </p>
+      </li>
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">02</span>
+        <h3 class="tarjeta__titulo">Tus archivos</h3>
+        <p class="tarjeta__texto">
+          Cuánto ocupan tus descargas, qué ha llegado hoy, qué pesa más.
+          Y las ordena por tipo — moviendo, nunca borrando, y siempre
+          con vuelta atrás.
+        </p>
+      </li>
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">03</span>
+        <h3 class="tarjeta__titulo">Ve la pantalla</h3>
+        <p class="tarjeta__texto">
+          Lee el texto que no puedes copiar: un error en un diálogo, el
+          menú de un juego, un PDF escaneado.
+        </p>
+      </li>
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">04</span>
+        <h3 class="tarjeta__titulo">Busca imágenes por lo que se ve</h3>
+        <p class="tarjeta__texto">
+          «Aquella captura de League of Legends» la encuentra aunque el
+          archivo se llame <em>descarga (7).png</em>.
+        </p>
+      </li>
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">05</span>
+        <h3 class="tarjeta__titulo">Recuerda y avisa</h3>
+        <p class="tarjeta__texto">
+          Recordatorios, alarmas y temporizadores. Y cosas sobre ti, que
+          sigue sabiendo la próxima vez que la abras.
+        </p>
+      </li>
+      <li class="tarjeta" data-revelar>
+        <span class="tarjeta__indice">06</span>
+        <h3 class="tarjeta__titulo">Cambia de voz</h3>
+        <p class="tarjeta__texto">
+          «Ponte voz de hombre», «habla más despacio». Cinco voces en
+          español, dos de ellas masculinas.
+        </p>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ── Medido ───────────────────────────────────────────────── -->
+  <section class="seccion contenedor seccion--diferida" id="medido">
+    <div class="seccion__cabecera">
+      <span class="seccion__numero">03</span>
+      <h2 class="seccion__titulo">Medido, no prometido</h2>
+    </div>
+
+    <p class="entradilla" style="margin-top:0; margin-bottom: var(--gap-l)">
+      Cada número de este proyecto sale de una medición en una máquina
+      real, y está anotado en el código al lado de la decisión que
+      justifica. Estos son de una RTX 3060.
+    </p>
+
+    <ul class="rejilla rejilla--3">
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">3,5<span class="cifra__unidad"> %</span></p>
+        <p class="cifra__que">Error de transcripción</p>
+        <p class="cifra__nota">
+          Whisper medium con vocabulario propio. El modelo más grande que
+          se probó dio 24,1 %.
+        </p>
+      </li>
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">11<span class="cifra__unidad"> ms</span></p>
+        <p class="cifra__que">Sintetizar una frase</p>
+        <p class="cifra__nota">
+          Con las voces OneCore de Windows. El camino anterior tardaba
+          142 ms en lo mismo.
+        </p>
+      </li>
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">8/8</p>
+        <p class="cifra__que">Detección del nombre</p>
+        <p class="cifra__nota">
+          Con gramática restringida. En español «nova» y «no va» son los
+          mismos fonemas.
+        </p>
+      </li>
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">13<span class="cifra__unidad"> min</span></p>
+        <p class="cifra__que">Indexar 16 699 imágenes</p>
+        <p class="cifra__nota">
+          Una sola vez. Describirlas con un modelo de visión habría sido
+          entre 5 y 14 horas.
+        </p>
+      </li>
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">0,18<span class="cifra__unidad"> s</span></p>
+        <p class="cifra__que">Leer la pantalla entera</p>
+        <p class="cifra__nota">
+          Con el OCR que ya trae Windows. Nada que descargar.
+        </p>
+      </li>
+      <li class="cifra" data-revelar>
+        <p class="cifra__valor">496</p>
+        <p class="cifra__que">Tests</p>
+        <p class="cifra__nota">
+          Ninguno necesita micrófono, GPU ni conexión a internet.
+        </p>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ── Descarga ─────────────────────────────────────────────── -->
+  <section class="seccion contenedor seccion--diferida" id="descarga">
+    <div class="seccion__cabecera">
+      <span class="seccion__numero">04</span>
+      <h2 class="seccion__titulo">Descargar</h2>
+    </div>
+
+    <div class="descarga" data-componente="descarga" data-estado="sin-version"
+         data-revelar>
+      <button class="boton" type="button" data-papel="boton" disabled>
+        Todavía no hay descarga
+      </button>
+      <p class="descarga__aviso" data-papel="aviso"></p>
+      <p class="descarga__porque" data-papel="porque"></p>
+    </div>
+
+    <h3 class="micro" style="margin-top: var(--gap-l); margin-bottom: var(--gap-s)">
+      Lo que hará falta
+    </h3>
+
+    <ul class="requisitos">
+      <li class="requisito">
+        <span class="requisito__que">Sistema</span>
+        <span class="requisito__cual">Windows 10 u 11, 64 bits</span>
+      </li>
+      <li class="requisito">
+        <span class="requisito__que">Gráfica</span>
+        <span class="requisito__cual">
+          NVIDIA con 6 GB o más, recomendable. Sin ella funciona, más lenta.
+        </span>
+      </li>
+      <li class="requisito">
+        <span class="requisito__que">Memoria</span>
+        <span class="requisito__cual">16 GB de RAM</span>
+      </li>
+      <li class="requisito">
+        <span class="requisito__que">Disco</span>
+        <span class="requisito__cual">
+          Unos 6 GB entre el modelo de lenguaje, el de voz y el de imágenes
+        </span>
+      </li>
+      <li class="requisito">
+        <span class="requisito__que">Aparte</span>
+        <span class="requisito__cual">
+          <a href="https://ollama.com" rel="noopener"
+             style="border-bottom: 1px solid var(--linea)">Ollama</a>
+          instalado, que es quien corre el modelo
+        </span>
+      </li>
+      <li class="requisito">
+        <span class="requisito__que">Coste</span>
+        <span class="requisito__cual">Ninguno. Ni cuenta, ni suscripción, ni claves.</span>
+      </li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="pie contenedor">
+  <span>NOVA 5 · 2026</span>
+  <span>Local y gratis · Licencia MIT</span>
+  <a href="https://github.com/Benjahmlp22/NOVA-5.0-" rel="noopener">Código en GitHub</a>
+</footer>
+
+</body>
+</html>

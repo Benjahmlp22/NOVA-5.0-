@@ -1,0 +1,67 @@
+/* Los tokens.
+ *
+ * No son inventados: son los colores EXACTOS del panel de NOVA
+ * (`nova/ui/panel.py`). Que la web y el producto usen la misma paleta no
+ * es coquetería — es lo que hace que reconozcas el programa cuando lo
+ * abres después de verlo aquí.
+ *
+ * Si cambian allí, cambian aquí. Un solo sitio por lado.
+ */
+
+:root {
+  /* ── Superficie ─────────────────────────────────────────────── */
+  --vacio:        #0b0b0d;   /* _FONDO del panel */
+  --vacio-2:      #121216;
+  --linea:        #26262c;   /* _BORDE */
+  --linea-suave:  rgba(228, 228, 232, 0.09);
+
+  /* ── Tinta ──────────────────────────────────────────────────── */
+  --tinta:        #e4e4e8;   /* _TEXTO */
+  --tenue:        #80828a;   /* _TENUE */
+  --apagado:      #5a5c62;
+
+  /* ── Los estados de NOVA, tal cual los ves en el orbe ───────── */
+  --escucha:      #4da3ff;   /* azul */
+  --hablando:     #4cd964;   /* verde puro: a 85° del azul, se distingue
+                                sin leer nada */
+  --pensando:     #f0f0f2;
+  --aviso:        #f0ba4a;   /* ámbar: no es un error, es un recado */
+  --error:        #e8613c;
+
+  /* ── Tipografía ─────────────────────────────────────────────── */
+  /* Monoespaciada del sistema: cero webfonts, cero peticiones, cero
+   * salto de texto al cargar. La familia entera pesa 0 bytes. */
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono",
+          Menlo, Consolas, monospace;
+
+  --micro:   0.6875rem;   /* 11px: las etiquetas en MAYÚSCULAS */
+  --cuerpo:  0.9375rem;
+  --titulo:  clamp(2.5rem, 9vw, 6.5rem);
+  --seccion: clamp(1.5rem, 4vw, 2.5rem);
+
+  --track-micro: 0.28em;
+
+  /* ── Ritmo ──────────────────────────────────────────────────── */
+  --gap-xs: 0.5rem;
+  --gap-s:  1rem;
+  --gap-m:  2rem;
+  --gap-l:  4rem;
+  --gap-xl: 8rem;
+
+  --ancho: 1180px;
+
+  /* ── Movimiento ─────────────────────────────────────────────── */
+  /* Con `steps()`, no suavizado: se ve el corte. Es la misma decisión
+   * que en el resto de sus webs. */
+  --corte:  180ms steps(4, end);
+  --suave:  260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Quien haya pedido menos movimiento, que no lo tenga. No es un extra:
+ * hay gente a la que el desplazamiento animado le provoca mareo. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --corte: 1ms linear;
+    --suave: 1ms linear;
+  }
+}

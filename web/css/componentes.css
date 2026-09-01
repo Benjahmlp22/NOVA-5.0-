@@ -1,0 +1,395 @@
+/* Cada bloque visible.
+ *
+ * Una clase raíz por componente y los hijos colgando con `__`. Así, al
+ * ver `.demo__estado` en el HTML ya sabes que lo controla
+ * `js/componentes/demo.js`, si es que lo controla alguien.
+ */
+
+/* ── Barra superior ──────────────────────────────────────────── */
+
+.barra {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-s);
+  padding-block: var(--gap-s);
+  background: color-mix(in srgb, var(--vacio) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--corte);
+}
+
+.barra.desplazada { border-bottom-color: var(--linea-suave); }
+
+.barra__marca {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+}
+
+/* El mismo latido que el orbe cuando está escuchando. */
+.barra__punto {
+  width: 7px;
+  height: 7px;
+  background: var(--escucha);
+  animation: latir 2.4s ease-in-out infinite;
+}
+
+@keyframes latir {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+.barra__enlaces {
+  display: flex;
+  gap: var(--gap-m);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--tenue);
+}
+
+.barra__enlace { transition: color var(--corte); }
+
+.barra__enlace:hover,
+.barra__enlace[aria-current="true"] { color: var(--tinta); }
+
+/* En móvil sólo queda el enlace al repositorio: los demás están a un
+ * dedo de scroll y la barra no da para seis palabras en mayúsculas. */
+@media (max-width: 700px) {
+  .barra__enlaces .barra__enlace:not(:last-child) { display: none; }
+}
+
+/* ── Titular ─────────────────────────────────────────────────── */
+
+.titular {
+  font-size: var(--titulo);
+  font-weight: 800;
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  text-transform: uppercase;
+}
+
+.titular__eco {
+  display: block;
+  color: var(--apagado);
+}
+
+.entradilla {
+  max-width: 46ch;
+  margin-top: var(--gap-m);
+  color: var(--tenue);
+}
+
+.entradilla strong {
+  color: var(--tinta);
+  font-weight: 600;
+}
+
+/* ── Etiqueta de estado ──────────────────────────────────────── */
+
+.etiqueta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--linea);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--tenue);
+}
+
+.etiqueta::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+
+.etiqueta--aviso {
+  color: var(--aviso);
+  border-color: color-mix(in srgb, var(--aviso) 40%, transparent);
+}
+
+/* ── Orbe ────────────────────────────────────────────────────── */
+
+.orbe {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  width: min(100%, 380px);
+  margin-inline: auto;
+}
+
+.orbe__lienzo { width: 100%; height: 100%; }
+
+/* ── Demo de conversación ────────────────────────────────────── */
+
+.demo {
+  border: 1px solid var(--linea);
+  background: var(--vacio-2);
+  font-size: 0.875rem;
+}
+
+.demo__cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--linea);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--tenue);
+}
+
+.demo__estado {
+  margin-left: auto;
+  color: var(--apagado);
+  transition: color var(--corte);
+}
+
+.demo__estado[data-estado="escucha"]  { color: var(--escucha); }
+.demo__estado[data-estado="pensando"] { color: var(--pensando); }
+.demo__estado[data-estado="hablando"] { color: var(--hablando); }
+
+.demo__cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.1rem 0.9rem;
+  /* Fija para que la caja no crezca y encoja con cada turno: un salto
+   * de maquetación cada dos segundos marea. */
+  min-height: 13rem;
+}
+
+.demo__turno {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: var(--gap-xs);
+  align-items: start;
+}
+
+.demo__quien {
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--apagado);
+  padding-top: 0.15rem;
+}
+
+.demo__turno--nova .demo__quien { color: var(--escucha); }
+
+/* El cursor sólo mientras se escribe: lo pone y lo quita el JS con la
+ * clase, no tocando estilos a mano. */
+.demo__turno.escribiendo .demo__texto::after {
+  content: "\2588";
+  color: var(--escucha);
+  animation: parpadeo 1s steps(2, end) infinite;
+}
+
+@keyframes parpadeo { 50% { opacity: 0; } }
+
+/* El turno es una rejilla de dos columnas (quién | qué dijo), y la
+ * acción se añade después del texto. Sin decirle la columna, cae en la
+ * estrecha de la izquierda y se sale: medido, 78 px dentro de 72. */
+.demo__accion {
+  grid-column: 2;
+  margin-top: 0.2rem;
+  font-size: var(--micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hablando);
+}
+
+/* ── Tarjetas ────────────────────────────────────────────────── */
+
+.tarjeta {
+  padding: var(--gap-m) 1.5rem;
+  background: var(--vacio);
+  transition: background var(--corte);
+}
+
+.tarjeta:hover { background: var(--vacio-2); }
+
+.tarjeta__indice {
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  color: var(--apagado);
+}
+
+.tarjeta__titulo {
+  margin-top: var(--gap-s);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.tarjeta__texto {
+  margin-top: var(--gap-xs);
+  color: var(--tenue);
+  font-size: 0.875rem;
+}
+
+/* ── Cifras medidas ──────────────────────────────────────────── */
+
+.cifra { padding: var(--gap-m) 1.5rem; background: var(--vacio); }
+
+.cifra__valor {
+  font-size: clamp(1.75rem, 5vw, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cifra__unidad { color: var(--tenue); font-size: 0.5em; }
+
+.cifra__que {
+  margin-top: var(--gap-xs);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--tenue);
+}
+
+.cifra__nota {
+  margin-top: var(--gap-xs);
+  font-size: 0.8125rem;
+  color: var(--apagado);
+}
+
+/* ── Descarga ────────────────────────────────────────────────── */
+
+/* Borde a rayas: se lee como "esto todavía no está" sin necesidad de
+ * leerlo. */
+.descarga {
+  padding: var(--gap-l) var(--gap-m);
+  text-align: center;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--vacio-2), var(--vacio-2)) padding-box,
+    repeating-linear-gradient(
+      45deg,
+      var(--linea) 0 8px,
+      transparent 8px 16px
+    ) border-box;
+}
+
+.boton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding: 0.9rem 1.6rem;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--tinta);
+  background: transparent;
+  color: var(--tinta);
+  font-family: inherit;
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--corte);
+}
+
+/* La inversión: un bloque de tinta que entra desde la izquierda. */
+.boton::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--tinta);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--corte);
+}
+
+.boton:hover:not(:disabled)::before,
+.boton:focus-visible:not(:disabled)::before { transform: scaleX(1); }
+
+.boton:hover:not(:disabled),
+.boton:focus-visible:not(:disabled) { color: var(--vacio); }
+
+.boton:disabled {
+  border-color: var(--linea);
+  color: var(--apagado);
+  cursor: not-allowed;
+}
+
+.descarga__aviso {
+  margin-top: var(--gap-m);
+  margin-inline: auto;
+  max-width: 52ch;
+  color: var(--tenue);
+  font-size: 0.875rem;
+}
+
+.descarga__porque {
+  margin-top: var(--gap-s);
+  margin-inline: auto;
+  max-width: 52ch;
+  color: var(--apagado);
+  font-size: 0.8125rem;
+}
+
+/* ── Requisitos ──────────────────────────────────────────────── */
+
+.requisitos { display: grid; gap: 1px; background: var(--linea-suave); }
+
+.requisito {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+  padding: 1rem 1.25rem;
+  background: var(--vacio);
+}
+
+@media (min-width: 640px) {
+  .requisito {
+    grid-template-columns: 12rem 1fr;
+    gap: var(--gap-s);
+    align-items: baseline;
+  }
+}
+
+.requisito__que {
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--tenue);
+}
+
+.requisito__cual { color: var(--tinta); font-size: 0.9rem; }
+
+/* ── Pie ─────────────────────────────────────────────────────── */
+
+.pie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-s);
+  justify-content: space-between;
+  padding-block: var(--gap-m);
+  border-top: 1px solid var(--linea-suave);
+  font-size: var(--micro);
+  letter-spacing: var(--track-micro);
+  text-transform: uppercase;
+  color: var(--apagado);
+}
+
+.pie a:hover { color: var(--tinta); }
+
+/* Nada de animación para quien haya pedido que no la haya. */
+@media (prefers-reduced-motion: reduce) {
+  .barra__punto,
+  .demo__turno.escribiendo .demo__texto::after { animation: none; }
+}
