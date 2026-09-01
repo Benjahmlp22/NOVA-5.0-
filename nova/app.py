@@ -109,7 +109,8 @@ def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
 
 
 def elegir_cerebro(*, preferencia: str, hay_clave: bool,
-                   auto: bool = False, apretado: bool = False) -> bool:
+                   auto: bool = False, apretado: bool = False,
+                   siempre: bool = False) -> bool:
     """¿Toca pensar en la nube? Suelta para poder probarla sin montar Qt.
 
     Manda lo que Benja haya pedido, en los dos sentidos: "modo rápido"
@@ -125,7 +126,9 @@ def elegir_cerebro(*, preferencia: str, hay_clave: bool,
         return False
     if preferencia == "rapido":
         return True
-    return auto and apretado
+    # `siempre` es "arranca en rápido y quédate ahí". Decir "modo local"
+    # sigue ganando, porque es una preferencia explícita y ésta no.
+    return siempre or (auto and apretado)
 
 
 def estado_en_reposo(*, ocupada: bool, escuchando: bool, sorda: bool = False) -> str:
@@ -421,6 +424,9 @@ class Nova(QObject):
         # `.emit` y no el método: lo llama el hilo trabajador.
         tool_plugins.conectar(self.plugins, self._abrir_plugins.emit)
         cerebro.conectar(self)
+        # Si está puesto el modo rápido de serie, que valga desde la
+        # primera frase y no desde el primer latido del vigilante.
+        self._aplicar_cerebro(apretado=False)
         self._aplicar_voz_de_plugins()
 
         self.ui.mostrar()
@@ -527,6 +533,7 @@ class Nova(QObject):
             hay_clave=self.remoto.disponible,
             auto=CONFIG.remoto_auto,
             apretado=apretado,
+            siempre=CONFIG.remoto_siempre,
         )
         if quiere == self._en_remoto:
             return

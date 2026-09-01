@@ -159,6 +159,13 @@ class Config:
     # propósito: mandar tus datos fuera no puede ser un efecto
     # secundario de abrir un juego.
     remoto_auto: bool = field(default_factory=lambda: _env_bool("NOVA_REMOTO_AUTO", False))
+    # Arrancar YA en modo rápido, sin tener que pedirlo cada sesión.
+    # En el código va a false: quien clone esto no ha dado permiso para
+    # que sus datos salgan. En el .env de Benja va a true, que es lo que
+    # pidió el 02/09.
+    remoto_siempre: bool = field(
+        default_factory=lambda: _env_bool("NOVA_REMOTO_SIEMPRE", False)
+    )
 
     temperature: float = field(default_factory=lambda: float(_env("NOVA_TEMPERATURE", "0.6")))
     # Tope de tokens generados. Es un TECHO, no un objetivo: una

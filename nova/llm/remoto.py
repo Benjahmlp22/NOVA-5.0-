@@ -8,14 +8,22 @@ Un cerebro en la nube no ocupa ni un megabyte de tu VRAM: el "no me
 revientes el PC mientras juego" y el "quiero que programe bien" son, sin
 querer, el mismo problema.
 
-**Va apagado y no se enciende solo.**  Sin clave no existe: `disponible`
-devuelve False y NOVA no lo mira nunca.  Con clave, sigue haciendo falta
-que Benja diga «modo rápido» — porque encenderlo significa que lo que
-dices, y lo que NOVA recuerda de ti, salen de tu ordenador.  Eso lo
-decide él en cada sesión, no un umbral de VRAM.
+**Sin clave no existe**: `disponible` devuelve False y NOVA no lo mira
+nunca.  Con clave, quién manda es la configuración: por defecto hay que
+pedirlo («modo rápido») porque encenderlo significa que lo que dices sale
+de tu ordenador, y con `NOVA_REMOTO_SIEMPRE=true` arranca ya encendido —
+que es como lo quiso Benja el 02/09.  Decir «modo local» gana siempre.
 
 La clave se lee de `NOVA_GROQ_KEY` o de `data/groq.key`, que está fuera
 del repositorio.  Nunca se escribe en el log.
+
+**Lo que de verdad limita esto son los tokens por minuto, no el día.**
+Medido el 02/09 en las cabeceras: 1000 peticiones y **8000 tokens/min**.
+Un turno con el catálogo entero gastaba 3849 —3683 sólo de entrada— así
+que salían DOS turnos por minuto y el tercero se comía un 429 pidiendo
+23 segundos de espera.  Por eso existe `elegir_herramientas`: mandando
+sólo las 18 que vienen a cuento, el turno baja a ~1800 y salen cinco.
+Eso es lo que separa "usable" de "inusable" aquí.
 
 Groq porque es el único con capa gratuita de verdad y porque es el más
 rápido que hay (sirve desde LPUs, no desde GPUs).  Habla el dialecto de
@@ -31,6 +39,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -130,7 +141,16 @@ class ClienteRemoto:
             "stream": on_trozo is not None,
         }
         if tools:
-            payload["tools"] = relajar_esquemas(tools)
+            # Sólo las que vienen a cuento: el catálogo entero se come el
+            # presupuesto de tokens por minuto. Ver `elegir_herramientas`.
+            ultimo = next(
+                (m.get("content", "") for m in reversed(messages)
+                 if m.get("role") == "user"),
+                "",
+            )
+            payload["tools"] = relajar_esquemas(
+                elegir_herramientas(tools, str(ultimo))
+            )
 
         if on_trozo is not None:
             return self._en_trozos(payload, on_trozo)
@@ -145,6 +165,10 @@ class ClienteRemoto:
             resp = self._http.post(
                 f"{self.url}/chat/completions", json=payload, headers=self._cabeceras()
             )
+            if resp.status_code == 429 and self._esperar_y_reintentar(resp):
+                resp = self._http.post(
+                    f"{self.url}/chat/completions", json=payload, headers=self._cabeceras()
+                )
             resp.raise_for_status()
             datos = resp.json()
         except httpx.HTTPStatusError as exc:
@@ -177,6 +201,10 @@ class ClienteRemoto:
                 "POST", f"{self.url}/chat/completions",
                 json=payload, headers=self._cabeceras(),
             ) as resp:
+                if resp.status_code == 429:
+                    resp.read()
+                    if self._esperar_y_reintentar(resp):
+                        return self._en_trozos(payload, on_trozo)
                 if resp.status_code >= 400:
                     resp.read()
                     resp.raise_for_status()
@@ -207,6 +235,38 @@ class ClienteRemoto:
             tool_calls=_llamadas([crudas[i] for i in sorted(crudas)]),
         )
 
+    # Cuánto se está dispuesto a esperar a que se reponga la cuota. Por
+    # encima de esto, mejor contestar con el modelo de casa que dejar a
+    # Benja mirando el orbe.
+    ESPERA_MAXIMA_S = 4.0
+
+    def _esperar_y_reintentar(self, resp: httpx.Response) -> bool:
+        """Ante un 429, esperar suele ser mejor que rendirse.
+
+        Los números de la capa gratuita, leídos de las cabeceras el
+        01/09: 1000 peticiones y **8000 tokens por minuto**. Un turno de
+        NOVA gasta 3849 (3683 de entrada, casi todo el catálogo de 68
+        herramientas), así que caben dos por minuto y el tercero se
+        pasa. Hablando, eso se toca.
+
+        Pero el cubo de tokens se rellena en **615 ms**. Un 429 aquí casi
+        nunca es "se te acabó", es "vas muy rápido": esperar medio
+        segundo y repetir sale infinitamente mejor que caerse al modelo
+        pequeño. Sin esto, NOVA se volvía a local a la tercera frase y
+        se quedaba ahí.
+
+        Lo que no se hace es esperar mucho: si la cabecera pide más de
+        `ESPERA_MAXIMA_S`, es una cuota de verdad y toca volver a casa.
+        """
+        espera = _segundos(resp.headers.get("retry-after")) or _segundos(
+            resp.headers.get("x-ratelimit-reset-tokens")
+        )
+        if espera is None or espera > self.ESPERA_MAXIMA_S:
+            return False
+        log.info("me he pasado de tokens por minuto; espero %.1fs y repito", espera)
+        time.sleep(espera + 0.1)
+        return True
+
     def _explicar(self, exc: httpx.HTTPStatusError) -> str:
         """El error HTTP, dicho de forma que se pueda arreglar oyéndolo."""
         codigo = exc.response.status_code
@@ -228,6 +288,113 @@ class ClienteRemoto:
 # mensaje de respuesta lo cite en `tool_call_id`, y quiere los argumentos
 # como cadena JSON y no como objeto. Sin esto la API contesta 400 y NOVA
 # se quedaría muda justo en el modo que se supone que es el bueno.
+
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _segundos(valor: str | None) -> float | None:
+    """Las cabeceras de espera vienen en formatos distintos.
+
+    `retry-after` es un número de segundos; `x-ratelimit-reset-tokens`
+    viene como "615ms", "1m26.4s" o "2.5s". Se admiten los tres porque
+    los proveedores no se ponen de acuerdo y quedarse sin entender la
+    cabecera significa no reintentar nunca.
+    """
+    if not valor:
+        return None
+    texto = valor.strip().lower()
+    try:
+        return float(texto)
+    except ValueError:
+        pass
+    total = 0.0
+    encontrado = False
+    for cantidad, unidad in re.findall(r"([\d.]+)\s*(ms|s|m|h)", texto):
+        try:
+            n = float(cantidad)
+        except ValueError:
+            continue
+        total += n * {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[unidad]
+        encontrado = True
+    return total if encontrado else None
+
+
+# Cuántas herramientas se le enseñan al cerebro de la nube.
+#
+# 18, medido el 02/09 sobre 18 frases reales con la herramienta que
+# debería salir en cada una:
+#
+#     tope=12   17/18 aciertos    ~684 tokens de catálogo
+#     tope=18   18/18 aciertos   ~1013 tokens
+#     tope=24   18/18 aciertos   ~1373 tokens
+#
+# 18 es donde deja de fallar y todavía no se paga de más: con 24 son 360
+# tokens por turno a cambio de nada. Ver `elegir_herramientas`.
+TOPE_HERRAMIENTAS = 18
+
+# Palabras que no distinguen nada y sólo meten ruido al puntuar.
+_VACIAS = frozenset({
+    "que", "qué", "el", "la", "los", "las", "un", "una", "de", "del", "en",
+    "por", "para", "con", "y", "o", "a", "al", "me", "mi", "tu", "te", "se",
+    "es", "esta", "está", "estoy", "hay", "lo", "le", "su", "mas", "más",
+    "como", "cómo", "cuando", "cuándo", "donde", "dónde", "quiero", "puedes",
+    "dime", "haz", "hazme", "ponme", "nova", "por favor", "esto", "eso",
+})
+
+
+def _palabras(texto: str) -> set[str]:
+    limpio = _sin_tildes((texto or "").lower())
+    return {p for p in re.findall(r"[a-z0-9]+", limpio) if p not in _VACIAS and len(p) > 2}
+
+
+def elegir_herramientas(
+    tools: list[dict[str, Any]], mensaje: str, tope: int = TOPE_HERRAMIENTAS
+) -> list[dict[str, Any]]:
+    """Las que vienen a cuento, no las 68.
+
+    Medido el 02/09 contra la capa gratuita de Groq, y es la diferencia
+    entre usable e inusable:
+
+        catálogo entero (68)   3849 tokens por turno  ->  2 turnos/minuto
+        sólo las que encajan   ~1000 tokens por turno -> ~8 turnos/minuto
+
+    El límite son 8000 tokens POR MINUTO, y 3683 de esos 3849 eran de
+    entrada: casi todo el catálogo. Con todo dentro, a la tercera frase
+    seguida NOVA se comía un 429 y el proveedor pedía esperar 23
+    segundos. Recortar descripciones no servía —ahorraba 200 tokens de
+    4400—: lo que pesa es el NÚMERO de herramientas.
+
+    Esto no se le hace al modelo local: Ollama no cobra por token y allí
+    el catálogo entero sólo cuesta un poco de prefill.
+
+    Se puntúa por palabras compartidas con lo que ha dicho Benja, y ante
+    el empate manda el orden del registro. Si aun así falta la que hacía
+    falta, el agente recibe "no existe esa herramienta" y lo reintenta,
+    que es un camino que ya existía.
+    """
+    if len(tools) <= tope:
+        return tools
+
+    claves = _palabras(mensaje)
+
+    def puntuar(tool: dict[str, Any]) -> int:
+        fn = (tool or {}).get("function") or {}
+        texto = _palabras(f"{fn.get('name', '')} {fn.get('description', '')}")
+        # El nombre pesa doble: "codigo_escribir" para "escribe un juego"
+        # es una señal mucho más firme que una palabra de la descripción.
+        nombre = _palabras(str(fn.get("name", "")))
+        return len(claves & texto) + 2 * len(claves & nombre)
+
+    puntuadas = [(puntuar(t), i, t) for i, t in enumerate(tools)]
+    # `i` desempata: mantiene el orden del registro y hace la elección
+    # reproducible, que importa para poder probarla.
+    puntuadas.sort(key=lambda p: (-p[0], p[1]))
+    return [t for _, _, t in puntuadas[:tope]]
 
 
 def relajar_esquemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

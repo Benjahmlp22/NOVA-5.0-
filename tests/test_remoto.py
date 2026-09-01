@@ -170,3 +170,130 @@ def test_relajar_no_toca_el_catalogo_original():
     }]
     relajar_esquemas(original)
     assert original[0]["function"]["parameters"]["properties"]["a"]["type"] == "string"
+
+
+# ── El 429 casi nunca es "se te acabó" ───────────────────────────────
+#
+# Cabeceras reales de la capa gratuita, leídas el 02/09: 1000 peticiones
+# y 8000 TOKENS POR MINUTO. Un turno de NOVA gasta 3849 (3683 de
+# entrada, casi todo el catálogo), así que caben dos por minuto y el
+# tercero se pasa. Pero el cubo se rellena en 615 ms: esperar y repetir
+# sale infinitamente mejor que caerse al modelo pequeño.
+
+def test_entiende_los_formatos_de_espera():
+    from nova.llm.remoto import _segundos
+
+    assert _segundos("615ms") == 0.615      # lo que devuelve Groq
+    assert _segundos("1m26.4s") == 86.4
+    assert _segundos("2.5s") == 2.5
+    assert _segundos("30") == 30.0          # retry-after, en segundos pelados
+    assert _segundos("basura") is None
+    assert _segundos(None) is None
+    assert _segundos("") is None
+
+
+class _RespuestaFalsa:
+    def __init__(self, headers: dict) -> None:
+        self.headers = headers
+
+
+def test_ante_una_espera_corta_repite(monkeypatch):
+    from nova.llm.remoto import ClienteRemoto
+
+    dormido = []
+    monkeypatch.setattr("nova.llm.remoto.time.sleep", dormido.append)
+    c = ClienteRemoto("https://x", "m", "clave")
+
+    assert c._esperar_y_reintentar(_RespuestaFalsa({"x-ratelimit-reset-tokens": "615ms"}))
+    assert dormido and dormido[0] < 1.0
+
+
+def test_ante_una_cuota_de_verdad_se_rinde(monkeypatch):
+    """Si pide esperar mucho, es una cuota real: mejor el modelo de casa
+    que dejar a Benja mirando el orbe."""
+    from nova.llm.remoto import ClienteRemoto
+
+    dormido = []
+    monkeypatch.setattr("nova.llm.remoto.time.sleep", dormido.append)
+    c = ClienteRemoto("https://x", "m", "clave")
+
+    assert not c._esperar_y_reintentar(_RespuestaFalsa({"retry-after": "3600"}))
+    assert not dormido
+
+
+def test_sin_cabecera_no_se_inventa_la_espera(monkeypatch):
+    from nova.llm.remoto import ClienteRemoto
+
+    monkeypatch.setattr("nova.llm.remoto.time.sleep", lambda s: None)
+    assert not ClienteRemoto("https://x", "m", "k")._esperar_y_reintentar(
+        _RespuestaFalsa({})
+    )
+
+
+def test_modo_rapido_de_serie_pero_local_sigue_ganando():
+    """`siempre` es "arranca en rápido"; decir "modo local" es explícito."""
+    assert elegir_cerebro(preferencia="", hay_clave=True, siempre=True)
+    assert not elegir_cerebro(preferencia="local", hay_clave=True, siempre=True)
+    # Y sin clave da igual lo que ponga.
+    assert not elegir_cerebro(preferencia="", hay_clave=False, siempre=True)
+
+
+# ── Sólo las herramientas que vienen a cuento ────────────────────────
+#
+# El catálogo entero son 3683 tokens de entrada por turno, y el límite
+# gratuito son 8000 POR MINUTO: salían dos turnos y el tercero se comía
+# un 429 con 23 segundos de espera. Recortar descripciones no servía
+# (200 tokens de 4400); lo que pesa es el número de herramientas.
+
+def _catalogo():
+    from nova.tools import build_registry
+    return build_registry().llm_schemas()
+
+
+def test_la_herramienta_que_toca_entra_siempre():
+    from nova.llm.remoto import elegir_herramientas
+
+    casos = [
+        ("hazme un juego en html", "codigo_escribir"),
+        ("prueba los tests de nodika", "codigo_probar"),
+        ("cambia el color en serpiente-nova", "codigo_editar"),
+        ("abre discord", "app_open"),
+        ("baja el volumen de spotify", "app_volume"),
+        ("recuerdame sacar la basura", "recordatorio_crear"),
+        ("busca en internet quien gano", "web_search"),
+        ("que tengo en pantalla", "pantalla_leer"),
+    ]
+    todas = _catalogo()
+    for frase, esperada in casos:
+        elegidas = [t["function"]["name"] for t in elegir_herramientas(todas, frase)]
+        assert esperada in elegidas, f"{frase!r} -> falta {esperada}"
+
+
+def test_recorta_de_verdad():
+    import json
+
+    from nova.llm.remoto import TOPE_HERRAMIENTAS, elegir_herramientas
+
+    todas = _catalogo()
+    pocas = elegir_herramientas(todas, "abre discord")
+    assert len(pocas) == TOPE_HERRAMIENTAS < len(todas)
+    # Y el ahorro es el que se buscaba: menos de la mitad.
+    assert len(json.dumps(pocas)) < len(json.dumps(todas)) / 2
+
+
+def test_un_catalogo_pequeno_se_manda_entero():
+    from nova.llm.remoto import elegir_herramientas
+
+    tres = _catalogo()[:3]
+    assert elegir_herramientas(tres, "lo que sea") == tres
+
+
+def test_la_eleccion_es_reproducible():
+    """Ante el empate manda el orden del registro, no el azar: si no, no
+    se puede probar ni depurar."""
+    from nova.llm.remoto import elegir_herramientas
+
+    todas = _catalogo()
+    a = [t["function"]["name"] for t in elegir_herramientas(todas, "cosa rara sin relacion")]
+    b = [t["function"]["name"] for t in elegir_herramientas(todas, "cosa rara sin relacion")]
+    assert a == b
