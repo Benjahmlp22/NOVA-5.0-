@@ -63,19 +63,32 @@ que sólo se supieron al tener clave:
 Si NOVA dice que el modelo no existe, es que lo han retirado otra vez:
 `NOVA_REMOTO_MODEL` con el nombre nuevo.
 
-### Pendiente de la clave
+### ~~"qué estás viendo en mi pantalla" tumbaba el modo rápido~~ — 02/09
 
-Es lo único que hace falta hacer a mano para que el «modo rápido»
-funcione. NOVA ya lo tiene todo montado, pero sin clave está inerte:
+En directo, con `NOVA_REMOTO_SIEMPRE=true` ya puesto, se agotaba el
+límite a la SEGUNDA frase — no era `elegir_herramientas` (eso ya
+funcionaba), era `pantalla.leer`: devuelve hasta 4000 caracteres de OCR
+en bruto a propósito, para que el modelo lo resuma, y eso entraba entero
+en la segunda ronda de la API junto con el catálogo otra vez. Medido:
+3215 tokens sólo esa ronda, sobre un presupuesto de 8000 por minuto.
 
-1. Cuenta gratis en <https://console.groq.com>.
-2. Crear una API key y copiarla.
-3. Pegarla sola en `data/groq.key` (esa carpeta no va al repositorio).
+`acotar_resultados` recorta a 600 caracteres cualquier resultado de
+herramienta que vaya camino a la nube — sólo camino a la nube: Ollama no
+cobra por token y ahí se le sigue mandando entero. Medido con la misma
+frase: 3215 → 2067 tokens, contestando igual de bien. Si otra
+herramienta empieza a devolver mucho texto (`web.search`,
+`carpeta.resumen`), el recorte ya está puesto sin tocarla una por una.
 
-A partir de ahí, «nova, modo rápido» piensa en la nube y «nova, modo
-local» vuelve. Va apagado en cada arranque a propósito: encenderlo
-significa que lo que hablas sale del PC, y un permiso que sobrevive a
-los reinicios acaba siendo un permiso que nadie recuerda haber dado.
+### La clave, y cómo está puesta hoy
+
+Vive en `data/groq.key` (fuera del repositorio) y está probada contra la
+API de verdad. `NOVA_REMOTO_SIEMPRE=true` en el `.env` de Benja: arranca
+YA en modo rápido, sin pedirlo cada sesión — decisión suya del 02/09.
+Decir «modo local» sigue ganando sobre eso.
+
+Para quien clone el repo sin esa preferencia: sin clave el modo rápido
+está inerte del todo, y con clave sigue apagado hasta pedir «modo
+rápido» — `NOVA_REMOTO_SIEMPRE` es `false` por defecto en el código.
 
 Si algún día NOVA dice que el modelo no existe, es que el proveedor lo
 ha retirado: `NOVA_REMOTO_MODEL` con el nombre nuevo y listo.
