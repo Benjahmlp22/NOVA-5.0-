@@ -126,6 +126,27 @@ class Config:
     residencia_minima: float = field(
         default_factory=lambda: float(_env("NOVA_RESIDENCIA_MINIMA", "0.85"))
     )
+    # ── Cerebro rápido, en la nube y APAGADO por defecto ─────────────
+    #
+    # Sin clave no existe: NOVA no lo mira nunca y todo va como siempre.
+    # Con clave sigue haciendo falta pedirlo ("modo rápido"), porque
+    # encenderlo significa que lo que dices sale del PC — y eso lo
+    # decide Benja, no un umbral de VRAM. Ver `nova/llm/remoto.py`.
+    remoto_url: str = field(
+        default_factory=lambda: _env("NOVA_REMOTO_URL", "https://api.groq.com/openai/v1")
+    )
+    # Caduca: los proveedores retiran modelos cada pocos meses. Si NOVA
+    # dice que no existe, se pone aquí el nombre nuevo.
+    remoto_model: str = field(
+        default_factory=lambda: _env("NOVA_REMOTO_MODEL", "llama-3.3-70b-versatile")
+    )
+    remoto_key: str = field(default_factory=lambda: _env("NOVA_GROQ_KEY", ""))
+    remoto_key_file: Path = ROOT / "data" / "groq.key"
+    # Cambiar solo a la nube cuando haya un juego delante. Apagado a
+    # propósito: mandar tus datos fuera no puede ser un efecto
+    # secundario de abrir un juego.
+    remoto_auto: bool = field(default_factory=lambda: _env_bool("NOVA_REMOTO_AUTO", False))
+
     temperature: float = field(default_factory=lambda: float(_env("NOVA_TEMPERATURE", "0.6")))
     # Tope de tokens generados: acota la latencia peor caso sin cortar
     # frases a medias (con 200 se truncaban enumeraciones a mitad).
@@ -236,6 +257,21 @@ class Config:
     log_file: Path = ROOT / "data" / "nova.log"
     memory_file: Path = ROOT / "data" / "memory.json"
     screenshots: Path = ROOT / "data" / "screenshots"
+
+    # La carpeta donde vive todo lo que Benja programa. Es la ÚNICA que
+    # las herramientas de código pueden mirar y en la que pueden
+    # ejecutar: dejar que un modelo de 4B elija ruta a partir de lo que
+    # ha entendido por un micrófono no es una opción.
+    proyectos_dir: Path = field(
+        default_factory=lambda: Path(
+            _env("NOVA_PROYECTOS", str(Path.home() / "Desktop" / "proyectos"))
+        )
+    )
+    # Cuánto se le deja correr a un script antes de matarlo. Uno que se
+    # queda esperando input() no termina nunca, y NOVA se quedaría
+    # colgada en "pensando" para siempre. Noventa segundos dan de sobra
+    # para una suite de tests mediana.
+    codigo_timeout: float = field(default_factory=lambda: float(_env("NOVA_CODIGO_TIMEOUT", "90")))
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.workspace, self.screenshots):

@@ -32,6 +32,23 @@ Lo que queda de aquello, y conviene no quitar:
   turno roto contesta y libera `_ocupada` en vez de matar el proceso y
   dejar a NOVA diciendo "todavía estoy con lo anterior" para siempre.
 
+### Conseguir la clave del cerebro rápido (5 minutos, gratis)
+
+Es lo único que hace falta hacer a mano para que el «modo rápido»
+funcione. NOVA ya lo tiene todo montado, pero sin clave está inerte:
+
+1. Cuenta gratis en <https://console.groq.com>.
+2. Crear una API key y copiarla.
+3. Pegarla sola en `data/groq.key` (esa carpeta no va al repositorio).
+
+A partir de ahí, «nova, modo rápido» piensa en la nube y «nova, modo
+local» vuelve. Va apagado en cada arranque a propósito: encenderlo
+significa que lo que hablas sale del PC, y un permiso que sobrevive a
+los reinicios acaba siendo un permiso que nadie recuerda haber dado.
+
+Si algún día NOVA dice que el modelo no existe, es que el proveedor lo
+ha retirado: `NOVA_REMOTO_MODEL` con el nombre nuevo y listo.
+
 ### Probarla en vivo, de punta a punta
 
 **Nada de lo hecho el 27 de agosto se ha visto correr con micrófono real

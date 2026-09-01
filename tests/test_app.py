@@ -201,18 +201,41 @@ class _UIFalsa:
         self.avisos.append(activo)
 
 
+class _RemotoFalso:
+    """Un cerebro remoto SIN clave, que es el caso normal.
+
+    Sin clave `elegir_cerebro` devuelve False siempre, así que el modo
+    ligero decide igual que antes de que la nube existiera. Es
+    justamente lo que estas pruebas tienen que seguir comprobando.
+    """
+
+    model = "remoto-de-mentira"
+
+    def __init__(self, disponible: bool = False) -> None:
+        self.disponible = disponible
+
+
+class _AgenteFalso:
+    llm = None
+
+
 class _NovaPelada:
-    """Sólo las dos piezas que deciden el modo ligero."""
+    """Sólo las piezas que deciden con qué cerebro se piensa."""
 
     _ocupada = False
     _modo_ligero = False
     _ligero_disponible = None
+    _preferencia_cerebro = ""
+    _en_remoto = False
     _revisar_recursos = Nova._revisar_recursos
     _hay_modelo_ligero = Nova._hay_modelo_ligero
+    _aplicar_cerebro = Nova._aplicar_cerebro
 
-    def __init__(self) -> None:
+    def __init__(self, remoto: bool = False) -> None:
         self.llm = _LLMFalso(CONFIG.model)
         self.ui = _UIFalsa()
+        self.remoto = _RemotoFalso(remoto)
+        self.agent = _AgenteFalso()
 
 
 def test_baja_al_modelo_ligero_cuando_la_gpu_se_llena():

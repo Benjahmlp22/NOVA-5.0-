@@ -8,6 +8,8 @@ from . import (
     audio,
     buscar_archivos,
     carpetas,
+    cerebro,
+    codigo,
     files,
     imagenes,
     memory,
@@ -51,6 +53,8 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     imagenes.register(reg)
     carpetas.register(reg)
     plugins.register(reg)
+    codigo.register(reg)
+    cerebro.register(reg)
     return reg
 
 

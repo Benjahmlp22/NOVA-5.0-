@@ -53,11 +53,13 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
+from .llm.remoto import ClienteRemoto, leer_clave
 from .plugins import Gestor, cargar_activos
 from .tools import (
     PendingConfirmation,
     apps,
     build_registry,
+    cerebro,
     imagenes,
     memory,
     pantalla,
@@ -104,6 +106,26 @@ def va_a_sonar(*, hablar: bool, silenciada: bool, tts_activo: bool) -> bool:
     siempre. El bug no se veía porque casi nadie apaga la voz.
     """
     return hablar and not silenciada and tts_activo
+
+
+def elegir_cerebro(*, preferencia: str, hay_clave: bool,
+                   auto: bool = False, apretado: bool = False) -> bool:
+    """¿Toca pensar en la nube? Suelta para poder probarla sin montar Qt.
+
+    Manda lo que Benja haya pedido, en los dos sentidos: "modo rápido"
+    enciende aunque el PC vaya sobrado, y "modo local" apaga aunque haya
+    un juego delante comiéndose la VRAM.
+
+    Sin preferencia se queda en local, salvo que se haya activado el
+    cambio automático a mano (`NOVA_REMOTO_AUTO`). Va apagado a
+    propósito: que tus datos salgan del PC no puede ser un efecto
+    secundario de abrir un juego.
+    """
+    if not hay_clave or preferencia == "local":
+        return False
+    if preferencia == "rapido":
+        return True
+    return auto and apretado
 
 
 def estado_en_reposo(*, ocupada: bool, escuchando: bool, sorda: bool = False) -> str:
@@ -229,6 +251,18 @@ class Nova(QObject):
             num_ctx=CONFIG.num_ctx,
             timeout=CONFIG.request_timeout,
         )
+        # Cerebro de repuesto en la nube. Sin clave es inerte: no se
+        # contacta con nadie y NOVA funciona exactamente igual que antes.
+        self.remoto = ClienteRemoto(
+            CONFIG.remoto_url,
+            CONFIG.remoto_model,
+            leer_clave(CONFIG.remoto_key_file, CONFIG.remoto_key),
+            temperature=CONFIG.temperature,
+            max_tokens=CONFIG.max_tokens,
+        )
+        self._preferencia_cerebro = ""
+        self._en_remoto = False
+
         self.tools = build_registry(CONFIG.confirm_policy)
 
         # Plugins. Encontrarlos es leer JSON; el código de los activos se
@@ -360,6 +394,7 @@ class Nova(QObject):
         voz.conectar(self.speaker)
         voz.aplicar_guardado(self.speaker)
         tool_plugins.conectar(self.plugins, self.abrir_panel_plugins)
+        cerebro.conectar(self)
         self._aplicar_voz_de_plugins()
 
         self.ui.mostrar()
@@ -429,6 +464,44 @@ class Nova(QObject):
 
     # ── Recursos ─────────────────────────────────────────────────────
 
+    # ── Con qué piensa ───────────────────────────────────────────────
+
+    @property
+    def en_remoto(self) -> bool:
+        return self._en_remoto
+
+    @property
+    def modo_ligero(self) -> bool:
+        return self._modo_ligero
+
+    def preferir_cerebro(self, cual: str) -> None:
+        """Lo que Benja ha pedido: "rapido", "local" o "" para que decida ella.
+
+        No se guarda en disco a propósito. Encender la nube es dar
+        permiso para que lo que dices salga del ordenador, y un permiso
+        que sobrevive a los reinicios acaba siendo un permiso que nadie
+        recuerda haber dado.
+        """
+        self._preferencia_cerebro = cual
+        self._aplicar_cerebro(apretado=self._modo_ligero)
+
+    def _aplicar_cerebro(self, *, apretado: bool) -> None:
+        """Pone el cerebro que toca, si no es el que ya estaba."""
+        quiere = elegir_cerebro(
+            preferencia=self._preferencia_cerebro,
+            hay_clave=self.remoto.disponible,
+            auto=CONFIG.remoto_auto,
+            apretado=apretado,
+        )
+        if quiere == self._en_remoto:
+            return
+        self._en_remoto = quiere
+        # El agente es el único que llama al modelo: cambiarle el cliente
+        # cambia el cerebro entero sin tocar nada más.
+        self.agent.llm = self.remoto if quiere else self.llm
+        log.info("cerebro: %s", self.remoto.model if quiere else self.llm.model)
+        self.ui.set_modo_ligero(self._modo_ligero and not quiere)
+
     def _revisar_recursos(self) -> None:
         """¿Sigue el modelo dentro de la GPU, o lo ha echado un juego?
 
@@ -449,7 +522,10 @@ class Nova(QObject):
             return
 
         apretado = residencia < CONFIG.residencia_minima
-        if apretado == self._modo_ligero:
+        # Falta de VRAM es justo el caso en que la nube gana: allí no
+        # ocupa nada. Se mira SIEMPRE, aunque el modo ligero no cambie.
+        self._aplicar_cerebro(apretado=apretado)
+        if self._en_remoto or apretado == self._modo_ligero:
             return
         if apretado and self._hay_modelo_ligero():
             log.info("sólo el %.0f%% del modelo en la GPU: paso al ligero",

@@ -761,8 +761,11 @@ nova/
     conversation.py personalidad e historial
     awareness.py    hora, app activa, batería, clima
     polish.py       limpieza de tics y longitud de la voz
-  llm/ollama.py     cliente del modelo local
+  llm/
+    ollama.py       cliente del modelo local
+    remoto.py       cerebro rápido en la nube, opcional y apagado por defecto
   winrt.py          puente a PowerShell para lo que sólo da WinRT
+  forense.py        lo que queda escrito si NOVA muere sin decir nada
   recursos.py       cuánto sitio hay y cuánto puede ocupar NOVA
   plugins/          manifiesto, revisión del código y gestor
   vista/
@@ -777,7 +780,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              545 tests, sin red ni micrófono
+tests/              582 tests, sin red ni micrófono
 ```
 
 ## Tests
