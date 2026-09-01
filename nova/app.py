@@ -44,6 +44,7 @@ from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
 from .llm.ollama import OllamaClient
+from .plugins import Gestor, cargar_activos
 from .tools import (
     PendingConfirmation,
     apps,
@@ -53,6 +54,9 @@ from .tools import (
     pantalla,
     recordatorios,
     voz,
+)
+from .tools import (
+    plugins as tool_plugins,
 )
 from .ui import Interfaz
 from .voice import Speaker, Transcriptor, VoiceListener, play_chime
@@ -118,16 +122,23 @@ class _Worker(QObject):
     pendiente = pyqtSignal(object, str)     # list[PendingConfirmation], qué decir
     estado = pyqtSignal(str, str, str)      # etapa, herramienta, dato
 
-    def __init__(self, agent: Agent, conv: Conversation, awareness: Awareness) -> None:
+    def __init__(self, agent: Agent, conv: Conversation, awareness: Awareness,
+                 plugins=None) -> None:  # noqa: ANN001
         super().__init__()
         self.agent = agent
         self.conv = conv
         self.awareness = awareness
+        self.plugins = plugins
 
     def procesar(self, mensaje: str) -> None:
         # `memory.para_prompt()` lee un JSON de unos pocos KB; a
         # diferencia del clima, esto sí puede estar en el camino crítico.
-        prompt = build_system_prompt(self.awareness.snapshot(), memory.para_prompt())
+        # Los plugins activos añaden su personalidad al final del
+        # prompt. Se lee en cada turno y no una vez al arrancar: así
+        # activar uno en el panel se nota en la frase siguiente, sin
+        # reiniciar NOVA.
+        extra = self.plugins.personalidad() if self.plugins else ""
+        prompt = build_system_prompt(self.awareness.snapshot(), memory.para_prompt(), extra)
         respuesta = self.agent.run(prompt, self.conv.history(), mensaje)
 
         self.conv.add_user(mensaje)
@@ -188,6 +199,13 @@ class Nova(QObject):
             timeout=CONFIG.request_timeout,
         )
         self.tools = build_registry(CONFIG.confirm_policy)
+
+        # Plugins. Encontrarlos es leer JSON; el código de los activos se
+        # importa aquí y sólo aquí (ver nova/plugins/carga.py).
+        self.plugins = Gestor()
+        for aviso in cargar_activos(self.plugins, self.tools):
+            log.warning("plugin: %s", aviso)
+        self._panel_plugins = None
         self.conv = Conversation(CONFIG.history_turns)
         self.awareness = Awareness()
         self.agent = Agent(
@@ -264,7 +282,7 @@ class Nova(QObject):
 
         # ── Hilo de trabajo ──────────────────────────────────────────
         self._hilo = QThread()
-        self._worker = _Worker(self.agent, self.conv, self.awareness)
+        self._worker = _Worker(self.agent, self.conv, self.awareness, self.plugins)
         self._worker.moveToThread(self._hilo)
         self._procesar.connect(self._worker.procesar)
         self._confirmar.connect(self._worker.confirmar)
@@ -310,6 +328,8 @@ class Nova(QObject):
         # cambia de voz es él, no el registro.
         voz.conectar(self.speaker)
         voz.aplicar_guardado(self.speaker)
+        tool_plugins.conectar(self.plugins, self.abrir_panel_plugins)
+        self._aplicar_voz_de_plugins()
 
         self.ui.mostrar()
 
@@ -508,6 +528,51 @@ class Nova(QObject):
                 log.debug("no pude precalentar el modelo", exc_info=True)
 
         threading.Thread(target=_tarea, daemon=True, name="precalentar").start()
+
+    # ── Plugins ──────────────────────────────────────────────────────
+
+    def abrir_panel_plugins(self) -> None:
+        """Abre el panel. Se llama desde el hilo de la interfaz.
+
+        La ventana se guarda: abrirla dos veces trae al frente la que ya
+        estaba en vez de apilar copias.
+        """
+        from .ui.panel_plugins import PanelPlugins
+
+        if self._panel_plugins is None:
+            self._panel_plugins = PanelPlugins(self.plugins)
+            self._panel_plugins.cambiado.connect(self._al_cambiar_plugins)
+        self._panel_plugins.recargar()
+        self._panel_plugins.show()
+        self._panel_plugins.raise_()
+        self._panel_plugins.activateWindow()
+
+    def _al_cambiar_plugins(self) -> None:
+        """Alguien activó o apagó algo en el panel.
+
+        La personalidad se relee sola en cada turno, así que aquí sólo
+        hay que atender lo que NO se relee: la voz, y el código de los
+        que se acaban de encender.
+        """
+        self._aplicar_voz_de_plugins()
+        for aviso in cargar_activos(self.plugins, self.tools):
+            log.warning("plugin: %s", aviso)
+
+    def _aplicar_voz_de_plugins(self) -> None:
+        """La voz que pida el plugin activo, si pide alguna.
+
+        No pisa una elección tuya hecha a mano: si ya habías dicho «ponte
+        voz de hombre», eso manda sobre lo que traiga el plugin. Que un
+        plugin te cambie la voz sin avisar sería justo lo que no quieres.
+        """
+        from .tools import voz as tool_voz
+
+        if tool_voz.guardado().get("voz"):
+            return
+        pedida = self.plugins.voz_preferida()
+        if pedida and pedida != self.speaker.voz_actual:
+            log.info("un plugin pide la voz %s", pedida)
+            self.speaker.usar_voz(pedida)
 
     def salir(self) -> None:
         log.info("cerrando NOVA")

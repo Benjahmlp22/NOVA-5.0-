@@ -14,6 +14,7 @@ from . import (
     notas,
     organizar,
     pantalla,
+    plugins,
     portapapeles,
     recordatorios,
     system,
@@ -49,6 +50,7 @@ def build_registry(confirm_policy: str | None = None) -> ToolRegistry:
     pantalla.register(reg)
     imagenes.register(reg)
     carpetas.register(reg)
+    plugins.register(reg)
     return reg
 
 
