@@ -57,6 +57,13 @@ _NO_SON_JUEGOS = frozenset({
     "explorer", "opera", "chrome", "firefox", "msedge", "brave",
     "code", "devenv", "pycharm64", "obs64", "vlc", "mpc-hc64",
     "ApplicationFrameHost", "TextInputHost", "python", "pythonw",
+    # Añadidos el 01/09 tras verlo fallar en vivo: con Discord maximizado
+    # NOVA se negó a correr unos tests diciendo "tienes Discord a pantalla
+    # completa". Estas se ponen a pantalla completa a todas horas y no le
+    # quitan fotogramas a nadie.
+    "Discord", "Spotify", "steam", "steamwebhelper", "EpicGamesLauncher",
+    "WhatsApp", "Telegram", "Notion", "slack", "Teams", "olk", "OUTLOOK",
+    "WindowsTerminal", "cmd", "powershell", "notepad", "Notepad",
 })
 
 
