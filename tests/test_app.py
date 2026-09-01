@@ -425,3 +425,52 @@ def test_una_confirmacion_rota_tampoco_deja_a_nova_colgada():
     trabajador.confirmar(PendingConfirmation(tool="files.delete", args={}, summary="borrar"))
 
     assert len(recibido) == 1
+
+
+# ── Caerse a local cuando la nube falla ──────────────────────────────
+#
+# `remoto.py` redactaba errores que decían "Vuelvo a lo local" y NADIE
+# cambiaba el cerebro de vuelta: el agente seguía apuntando a la nube, el
+# turno siguiente fallaba igual, y NOVA repetía esa frase para siempre.
+
+class _AgenteVacio:
+    llm = None
+
+
+class _NovaConNube:
+    _preferencia_cerebro = "rapido"
+    _en_remoto = True
+    _modo_ligero = False
+    caerse_a_local = Nova.caerse_a_local
+    _aplicar_cerebro = Nova._aplicar_cerebro
+
+    def __init__(self) -> None:
+        self.remoto = _RemotoFalso(True)
+        self.llm = _LLMFalso(CONFIG.model)
+        self.ui = _UIFalsa()
+        self.agent = _AgenteVacio()
+
+
+def test_si_la_nube_falla_se_vuelve_al_modelo_de_casa():
+    n = _NovaConNube()
+    n.caerse_a_local("cuota agotada")
+
+    assert not n._en_remoto
+    assert n.agent.llm is n.llm
+
+
+def test_y_no_se_reenciende_solo_despues_de_fallar():
+    """Si vuelve a encenderse solo, vuelve a fallar. Que lo pida él."""
+    n = _NovaConNube()
+    n.caerse_a_local("cuota agotada")
+    n._aplicar_cerebro(apretado=True)     # el latido de recursos, otra vez
+    assert not n._en_remoto
+
+
+def test_caerse_a_local_estando_ya_en_local_no_hace_nada():
+    n = _NovaConNube()
+    n._en_remoto = False
+    n._preferencia_cerebro = "rapido"
+    n.caerse_a_local("lo que sea")
+    # No ha tocado la preferencia: no había nada que arreglar.
+    assert n._preferencia_cerebro == "rapido"

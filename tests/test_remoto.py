@@ -114,3 +114,59 @@ def test_una_conversacion_normal_no_se_toca():
         {"role": "assistant", "content": "dime"},
     ]
     assert a_openai(original) == original
+
+
+# ── Lo que enseñó la clave de verdad ─────────────────────────────────
+#
+# El cerebro remoto se escribió a ciegas, sin clave. En cuanto hubo una,
+# el 01/09, salieron tres cosas a la primera llamada.
+
+def test_los_opcionales_pueden_llegar_nulos():
+    """Groq valida el esquema y devuelve 400 si un opcional llega null.
+
+    Los modelos grandes rellenan TODOS los huecos y ponen `null` en los
+    que no aplican. Medido: gpt-oss-120b mandaba {"nombre": null} para
+    codigo.proyectos y el turno entero se caía con
+    «`/nombre`: expected string, but got null».
+    """
+    from nova.llm.remoto import relajar_esquemas
+
+    original = [{
+        "type": "function",
+        "function": {
+            "name": "codigo_ver",
+            "description": "lee un archivo",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "proyecto": {"type": "string"},
+                    "archivo": {"type": "string"},
+                    "desde": {"type": "integer"},
+                },
+                "required": ["proyecto", "archivo"],
+            },
+        },
+    }]
+    props = relajar_esquemas(original)[0]["function"]["parameters"]["properties"]
+
+    # El opcional admite null...
+    assert props["desde"]["type"] == ["integer", "null"]
+    # ...y los obligatorios NO: mandarlos nulos sigue siendo un error.
+    assert props["proyecto"]["type"] == "string"
+    assert props["archivo"]["type"] == "string"
+
+
+def test_relajar_no_toca_el_catalogo_original():
+    """Ollama no valida nada y le vale el esquema estricto: esto es sólo
+    para salir a la nube."""
+    from nova.llm.remoto import relajar_esquemas
+
+    original = [{
+        "type": "function",
+        "function": {
+            "name": "x",
+            "parameters": {"type": "object", "properties": {"a": {"type": "string"}}},
+        },
+    }]
+    relajar_esquemas(original)
+    assert original[0]["function"]["parameters"]["properties"]["a"]["type"] == "string"

@@ -149,6 +149,7 @@ class _Worker(QObject):
     """Ejecuta el turno pesado fuera del hilo de la interfaz."""
 
     listo = pyqtSignal(str, list, bool)    # texto, herramientas, ya dicho
+    cayo_el_remoto = pyqtSignal(str)       # el cerebro de la nube ha fallado
     frase = pyqtSignal(str)                # una frase suelta, según se genera
     pendiente = pyqtSignal(object, str)     # list[PendingConfirmation], qué decir
     estado = pyqtSignal(str, str, str)      # etapa, herramienta, dato
@@ -193,6 +194,12 @@ class _Worker(QObject):
             self.awareness.snapshot(), memory.para_prompt(), extra, self.conv.apuntes()
         )
         respuesta = self.agent.run(prompt, self.conv.history(), mensaje)
+
+        # Si el cerebro de la nube se ha caído, el turno vuelve con su
+        # explicación como texto. Volver a casa es cosa de la app, no del
+        # agente: es ella quien tiene los dos clientes.
+        if respuesta.fallo_del_modelo:
+            self.cayo_el_remoto.emit(respuesta.text)
 
         for herramienta, resultado in respuesta.resultados:
             self.conv.apuntar(herramienta, resultado)
@@ -364,6 +371,7 @@ class Nova(QObject):
         self._worker.pendiente.connect(self._al_pendiente)
         self._worker.estado.connect(self._al_estado)
         self._worker.frase.connect(self._al_frase)
+        self._worker.cayo_el_remoto.connect(self.caerse_a_local)
 
         self._pendientes: list[PendingConfirmation] = []
         self._ocupada = False
@@ -510,6 +518,25 @@ class Nova(QObject):
         self.agent.llm = self.remoto if quiere else self.llm
         log.info("cerebro: %s", self.remoto.model if quiere else self.llm.model)
         self.ui.set_modo_ligero(self._modo_ligero and not quiere)
+
+    def caerse_a_local(self, motivo: str) -> None:
+        """El cerebro remoto ha fallado: se vuelve a casa, de verdad.
+
+        Esto faltaba y era una mentira en el código. `remoto.py` redacta
+        errores que dicen "Vuelvo a lo local" —cuota agotada, clave mala,
+        modelo retirado— pero NADIE cambiaba el cerebro de vuelta: el
+        agente seguía apuntando a la nube, así que el turno siguiente
+        fallaba igual, y el siguiente, repitiendo esa frase para siempre.
+
+        Se apaga la preferencia además de la conexión: si vuelve a
+        encenderse solo, vuelve a fallar. Que lo pida Benja otra vez si
+        quiere reintentarlo.
+        """
+        if not self._en_remoto:
+            return
+        log.warning("el cerebro rápido falló (%s): vuelvo al modelo local", motivo)
+        self._preferencia_cerebro = "local"
+        self._aplicar_cerebro(apretado=self._modo_ligero)
 
     def _revisar_recursos(self) -> None:
         """¿Sigue el modelo dentro de la GPU, o lo ha echado un juego?

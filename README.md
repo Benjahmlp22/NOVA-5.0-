@@ -780,7 +780,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              608 tests, sin red ni micrófono
+tests/              619 tests, sin red ni micrófono
 ```
 
 ## Tests

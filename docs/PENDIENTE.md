@@ -43,7 +43,27 @@ se vio hasta probarla hablando.
 Al tocar un default hay que tocar los tres sitios: `config.py`, `.env` y
 `.env.example`.
 
-### Conseguir la clave del cerebro rápido (5 minutos, gratis)
+### ~~Conseguir la clave del cerebro rápido~~ — hecha el 01/09
+
+Está en `data/groq.key` y probada contra la API de verdad. Tres cosas
+que sólo se supieron al tener clave:
+
+- `llama-3.3-70b-versatile`, el modelo que traía por defecto, **ya no
+  existe**. Ahora es `openai/gpt-oss-120b`: 0.62 s por respuesta con el
+  catálogo entero, contra los 1-2 s del qwen local en caliente (4-7 s
+  con un juego abierto).
+- Los modelos grandes rellenan TODOS los parámetros y ponen `null` en
+  los que no aplican. Groq valida el esquema y devolvía 400. Se relajan
+  los opcionales al salir (`relajar_esquemas`) y el registro descarta
+  los nulos antes de llamar al handler.
+- `qwen/qwen3.8-27b` **agotó la cuota gratuita en la segunda llamada**.
+  La capa gratis tiene tope diario de verdad; conviene saberlo antes de
+  contar con ella para algo.
+
+Si NOVA dice que el modelo no existe, es que lo han retirado otra vez:
+`NOVA_REMOTO_MODEL` con el nombre nuevo.
+
+### Pendiente de la clave
 
 Es lo único que hace falta hacer a mano para que el «modo rápido»
 funcione. NOVA ya lo tiene todo montado, pero sin clave está inerte:

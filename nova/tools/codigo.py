@@ -442,6 +442,68 @@ def abrir(proyecto: str, archivo: str = "index.html") -> ToolResult:
     )
 
 
+def editar(proyecto: str, archivo: str, buscar_texto: str,
+           reemplazar: str = "") -> ToolResult:
+    """Cambia UN trozo de un archivo, dejando el resto intacto.
+
+    Es la diferencia entre un juguete y una compañera. Con sólo
+    `escribir`, un "cámbiale el color a la serpiente" obliga a regenerar
+    las 120 líneas enteras de memoria: se tarda veinte segundos, se
+    gastan dos mil tokens y se pierde por el camino cualquier cosa que
+    hubiera tocado Benja a mano.
+
+    El trozo tiene que aparecer **una sola vez**. Si sale varias, no se
+    toca nada y se dice cuántas: reemplazar la primera de cinco
+    coincidencias es el clásico de dejar el archivo medio cambiado, y
+    aquí no hay `git` que lo deshaga.
+
+    Con `reemplazar` vacío, borra el trozo.
+    """
+    carpeta = _resolver(proyecto, estricto=True)
+    if carpeta is None:
+        return _no_lo_encuentro(proyecto)
+    if not (buscar_texto or "").strip():
+        return ToolResult(ok=False, message="¿Qué parte quieres que cambie?")
+
+    destino = carpeta / (archivo or "").strip()
+    if not destino.is_file() or not _dentro(destino):
+        return ToolResult(
+            ok=False, message=f"No encuentro «{archivo}» en {carpeta.name}."
+        )
+    try:
+        texto = destino.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return ToolResult(ok=False, message=f"No pude leerlo: {exc}")
+
+    cuantas = texto.count(buscar_texto)
+    if cuantas == 0:
+        return ToolResult(
+            ok=False,
+            message=f"Eso no está en {destino.name} tal cual. "
+                    "Léelo otra vez y cópiame el trozo exacto.",
+        )
+    if cuantas > 1:
+        return ToolResult(
+            ok=False,
+            message=f"Ese trozo sale {cuantas} veces en {destino.name}. "
+                    "Dame uno más largo que sólo pueda ser el que quieres.",
+            data={"veces": cuantas},
+        )
+
+    try:
+        destino.write_text(texto.replace(buscar_texto, reemplazar or "", 1),
+                           encoding="utf-8")
+    except OSError as exc:
+        return ToolResult(ok=False, message=f"No pude guardarlo: {exc}")
+
+    verbo = "He quitado eso de" if not reemplazar else "He cambiado"
+    return ToolResult(
+        ok=True,
+        message=f"{verbo} {destino.name} en {carpeta.name}.",
+        data={"ruta": str(destino)},
+    )
+
+
 # ── Ejecutar ─────────────────────────────────────────────────────────
 
 def _hay_sitio(igualmente: bool) -> ToolResult | None:
@@ -836,6 +898,29 @@ def register(reg) -> None:  # noqa: ANN001
         risk=Risk.MEDIUM,
         responde_sola=True,
         resumir=lambda a: f"escribir {a.get('archivo', '?')} en {a.get('proyecto', '?')}",
+    ))
+    reg.register(Tool(
+        name="codigo.editar",
+        description=(
+            "CAMBIA una parte de un archivo que ya existe, dejando el resto igual. "
+            "Es la de «cámbiale el color», «hazlo más rápido», «arregla esa línea». "
+            "Léelo antes con codigo.ver y copia el trozo EXACTO en buscar_texto. "
+            "Úsala en vez de codigo.escribir para retocar algo que ya está hecho"
+        ),
+        handler=editar,
+        schema={
+            "type": "object",
+            "properties": {
+                "proyecto": {"type": "string"},
+                "archivo": {"type": "string"},
+                "buscar_texto": {"type": "string"},
+                "reemplazar": {"type": "string"},
+            },
+            "required": ["proyecto", "archivo", "buscar_texto"],
+        },
+        risk=Risk.MEDIUM,
+        responde_sola=True,
+        resumir=lambda a: f"cambiar un trozo de {a.get('archivo', '?')} en {a.get('proyecto', '?')}",
     ))
     reg.register(Tool(
         name="codigo.abrir",

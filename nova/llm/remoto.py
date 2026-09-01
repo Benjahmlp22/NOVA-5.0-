@@ -130,7 +130,7 @@ class ClienteRemoto:
             "stream": on_trozo is not None,
         }
         if tools:
-            payload["tools"] = tools
+            payload["tools"] = relajar_esquemas(tools)
 
         if on_trozo is not None:
             return self._en_trozos(payload, on_trozo)
@@ -228,6 +228,49 @@ class ClienteRemoto:
 # mensaje de respuesta lo cite en `tool_call_id`, y quiere los argumentos
 # como cadena JSON y no como objeto. Sin esto la API contesta 400 y NOVA
 # se quedaría muda justo en el modo que se supone que es el bueno.
+
+
+def relajar_esquemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deja que los parámetros opcionales lleguen como `null`.
+
+    Encontrado probando con la clave de verdad el 01/09. Los modelos
+    grandes rellenan TODOS los parámetros de una herramienta, y a los que
+    no aplican les ponen `null`:
+
+        {"nombre": null}   para codigo.proyectos, que los lleva opcionales
+
+    Groq valida el esquema en su lado y devuelve un 400:
+
+        parameters for tool codigo_proyectos did not match schema:
+        `/nombre`: expected string, but got null
+
+    Y con eso el turno entero se cae. Ollama no valida nada, así que el
+    mismo esquema le vale — por eso esto se hace SÓLO aquí, al salir, y
+    el catálogo de casa se queda como está.
+
+    Sólo se tocan los que no son obligatorios: si un parámetro es
+    `required`, mandarlo nulo sigue siendo un error y conviene que lo
+    diga.
+    """
+    salida: list[dict[str, Any]] = []
+    for tool in tools:
+        fn = dict((tool or {}).get("function") or {})
+        params = dict(fn.get("parameters") or {})
+        propiedades = params.get("properties") or {}
+        obligatorios = set(params.get("required") or ())
+
+        nuevas = {}
+        for nombre, definicion in propiedades.items():
+            copia = dict(definicion or {})
+            tipo = copia.get("type")
+            if nombre not in obligatorios and isinstance(tipo, str) and tipo != "null":
+                copia["type"] = [tipo, "null"]
+            nuevas[nombre] = copia
+
+        params["properties"] = nuevas
+        fn["parameters"] = params
+        salida.append({**tool, "function": fn})
+    return salida
 
 
 def a_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -197,3 +197,22 @@ def test_el_prompt_incluye_los_recuerdos():
 
     prompt = build_system_prompt("## Contexto actual\n- Ahora: lunes", "- odio el cilantro")
     assert "odio el cilantro" in prompt
+
+
+def test_un_parametro_nulo_es_un_parametro_que_no_se_dio():
+    """Los modelos grandes rellenan todos los huecos con null.
+
+    Medido el 01/09 con gpt-oss-120b: `codigo.proyectos` llegaba como
+    {"nombre": null}. Con nombre=None, cualquier handler que haga
+    `nombre.strip()` revienta — y hay varios.
+    """
+    from nova.tools.registry import Risk, Tool, ToolRegistry, ToolResult
+
+    def handler(nombre: str = "por defecto") -> ToolResult:
+        return ToolResult(ok=True, message=nombre.strip())
+
+    reg = ToolRegistry()
+    reg.register(Tool(name="x.y", description="d", handler=handler, risk=Risk.SAFE))
+
+    assert reg.execute("x.y", {"nombre": None}).message == "por defecto"
+    assert reg.execute("x.y", {"nombre": "  dado  "}).message == "dado"

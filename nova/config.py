@@ -137,8 +137,21 @@ class Config:
     )
     # Caduca: los proveedores retiran modelos cada pocos meses. Si NOVA
     # dice que no existe, se pone aquí el nombre nuevo.
+    # Medido el 01/09 con la clave de verdad, llamando a herramientas:
+    #
+    #   openai/gpt-oss-120b   0.62 s   el más listo de los gratuitos
+    #   openai/gpt-oss-20b    0.44 s   algo más rápido, bastante menos listo
+    #   qwen/qwen3.8-27b      —        agotó la cuota gratis en la 2ª llamada
+    #
+    # Para comparar: el qwen3.5:4b local tarda 1-2 s en caliente y 4-7 s
+    # con un juego abierto. El de 120.000 millones va MÁS rápido que el
+    # tuyo de 4.000, porque no corre en tu tarjeta.
+    #
+    # `llama-3.3-70b-versatile`, que era el valor anterior, ya no existe:
+    # los proveedores retiran modelos cada pocos meses. Si NOVA dice que
+    # no lo encuentra, es esto — se pone aquí el nombre nuevo.
     remoto_model: str = field(
-        default_factory=lambda: _env("NOVA_REMOTO_MODEL", "llama-3.3-70b-versatile")
+        default_factory=lambda: _env("NOVA_REMOTO_MODEL", "openai/gpt-oss-120b")
     )
     remoto_key: str = field(default_factory=lambda: _env("NOVA_GROQ_KEY", ""))
     remoto_key_file: Path = ROOT / "data" / "groq.key"

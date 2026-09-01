@@ -131,8 +131,21 @@ class ToolRegistry:
                 summary=_summarize(tool, args),
             )
 
+        # Un parámetro a `null` es un parámetro que NO se ha dado, y así
+        # es como hay que pasárselo al handler: quitándolo, para que use
+        # su valor por defecto.
+        #
+        # No es teórico. Los modelos grandes rellenan TODOS los huecos de
+        # una herramienta y ponen `null` en los que no aplican: medido el
+        # 01/09 con gpt-oss-120b, `codigo.proyectos` llegaba como
+        # `{"nombre": null}`. Con `nombre=None`, cualquier handler que
+        # haga `nombre.strip()` revienta con AttributeError — y hay
+        # varios. Antes no pasaba porque el modelo local se limita a
+        # omitir lo que no usa.
+        limpios = {k: v for k, v in (args or {}).items() if v is not None}
+
         try:
-            result = tool.handler(**args) if args else tool.handler()
+            result = tool.handler(**limpios) if limpios else tool.handler()
         except TypeError as exc:
             # Argumentos inventados por el modelo: es un error suyo, no
             # un fallo del sistema. Se lo decimos para que reintente bien.

@@ -118,6 +118,10 @@ class AgentReply:
     # eso YA lo miró — sin esto volvía a buscar lo mismo una y otra vez.
     # Ver `Conversation.apuntar`.
     resultados: list[tuple[str, str]] = field(default_factory=list)
+    # El modelo mismo falló (no respondió, cuota agotada, sin conexión).
+    # `text` lleva la explicación. Quien lo reciba puede decidir cambiar
+    # de cerebro: ver `Nova.caerse_a_local`.
+    fallo_del_modelo: bool = False
 
     @property
     def pending(self) -> PendingConfirmation | None:
@@ -241,7 +245,9 @@ class Agent:
                     on_trozo=emisor.recibir if emisor else None,
                 )
             except OllamaError as exc:
-                return AgentReply(text=str(exc), rounds=round_n)
+                return AgentReply(text=str(exc), rounds=round_n,
+                                  tools_used=used, resultados=resultados,
+                                  fallo_del_modelo=True)
 
             if not resp.tool_calls:
                 self._status("writing")
@@ -335,13 +341,15 @@ class Agent:
                 "content": "Resume en una frase lo que has hecho y responde ya. No pidas más herramientas.",
             }
         )
+        fallo = False
         try:
             final = self.llm.chat(messages)
             text = pulir(final.text)
         except OllamaError as exc:
             text = str(exc)
+            fallo = True
         return AgentReply(text=text, tools_used=used, rounds=self.max_rounds,
-                          resultados=resultados)
+                          resultados=resultados, fallo_del_modelo=fallo)
 
     def confirm(self, pending: PendingConfirmation) -> ToolResult:
         """Ejecuta lo que quedó pendiente tras el «sí» del usuario."""

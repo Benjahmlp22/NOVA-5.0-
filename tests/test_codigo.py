@@ -360,3 +360,57 @@ def test_lo_que_si_encaja_sigue_encajando_al_escribir(proyectos):
     assert r.ok
     assert "He creado el proyecto" not in r.message
     assert (proyectos / "01_Juegos_Web" / "nodika-motor" / "nuevo.js").is_file()
+
+
+# ── Editar en vez de reescribir ──────────────────────────────────────
+#
+# Con sólo `escribir`, un "cámbiale el color a la serpiente" obliga a
+# regenerar las 120 líneas de memoria: veinte segundos, dos mil tokens, y
+# se lleva por delante cualquier cosa que Benja hubiera tocado a mano.
+
+def test_editar_cambia_solo_lo_pedido(proyectos):
+    js = proyectos / "09_Scripts" / "conversor" / "juego.js"
+    js.write_text('const color = "verde";\nconst velocidad = 5;\n', encoding="utf-8")
+
+    r = codigo.editar("conversor", "juego.js", '"verde"', '"magenta"')
+    assert r.ok
+    # Lo pedido cambia...
+    assert '"magenta"' in js.read_text(encoding="utf-8")
+    # ...y lo demás se queda exactamente igual.
+    assert "const velocidad = 5;" in js.read_text(encoding="utf-8")
+
+
+def test_no_toca_nada_si_el_trozo_sale_varias_veces(proyectos):
+    """Cambiar la primera de cinco deja el archivo a medias, y aquí no
+    hay git que lo deshaga."""
+    js = proyectos / "09_Scripts" / "conversor" / "repes.js"
+    js.write_text("let x = 1;\nlet y = 1;\nlet z = 1;\n", encoding="utf-8")
+    antes = js.read_text(encoding="utf-8")
+
+    r = codigo.editar("conversor", "repes.js", "= 1;", "= 2;")
+    assert not r.ok
+    assert "3 veces" in r.message
+    assert js.read_text(encoding="utf-8") == antes
+
+
+def test_si_el_trozo_no_esta_lo_dice_sin_inventar(proyectos):
+    r = codigo.editar("conversor", "main.py", "esto no existe", "x")
+    assert not r.ok
+    assert "no está" in r.message
+
+
+def test_editar_sin_reemplazo_borra_el_trozo(proyectos):
+    js = proyectos / "09_Scripts" / "conversor" / "sobra.js"
+    js.write_text("bueno();\nconsole.log('depuracion');\nmas();\n", encoding="utf-8")
+
+    r = codigo.editar("conversor", "sobra.js", "console.log('depuracion');\n")
+    assert r.ok
+    texto = js.read_text(encoding="utf-8")
+    assert "depuracion" not in texto
+    assert "bueno();" in texto and "mas();" in texto
+
+
+def test_editar_tampoco_se_sale_de_la_carpeta(proyectos):
+    r = codigo.editar("conversor", "../../../../algo.txt", "a", "b")
+    assert not r.ok
+    assert "No encuentro" in r.message
