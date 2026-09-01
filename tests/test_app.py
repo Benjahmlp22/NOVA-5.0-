@@ -331,3 +331,74 @@ def test_sorda_nunca_dice_te_escucho():
 
 def test_sin_estar_sorda_todo_sigue_igual():
     assert estado_en_reposo(ocupada=False, escuchando=True, sorda=False) == "escucha"
+
+
+# ── El turno no puede llevarse el proceso por delante ─────────────────
+#
+# El 01/09 NOVA se cerró seis veces seguidas, siempre justo después de
+# entender una orden. La causa: `build_system_prompt` se quedó sin
+# actualizar cuando los plugins añadieron su personalidad al prompt, así
+# que `procesar` lanzaba un TypeError... dentro de un slot de Qt, que es
+# la única excepción de Python que mata el proceso entero (PyQt5 llama a
+# `qFatal()`). Dos pruebas, una por cada mitad del fallo.
+
+
+def test_el_prompt_admite_la_personalidad_de_los_plugins():
+    from nova.core.conversation import build_system_prompt
+
+    prompt = build_system_prompt("## Contexto", "- odio el cilantro", "Hablas como un pirata")
+    assert "Hablas como un pirata" in prompt
+    # Al final: un plugin matiza el carácter, no borra las reglas.
+    assert prompt.index("Hablas como un pirata") > prompt.index("odio el cilantro")
+
+
+def test_sin_plugins_el_prompt_no_cambia():
+    from nova.core.conversation import build_system_prompt
+
+    assert build_system_prompt("## Contexto", "- algo") == build_system_prompt(
+        "## Contexto", "- algo", ""
+    )
+
+
+class _AgenteRoto:
+    def run(self, *a, **k):  # noqa: ANN002, ANN003, ANN201, ARG002
+        raise TypeError("build_system_prompt() takes from 0 to 2 positional arguments")
+
+    def confirm(self, *a, **k):  # noqa: ANN002, ANN003, ANN201, ARG002
+        raise RuntimeError("la herramienta explotó")
+
+
+def test_un_turno_roto_contesta_en_vez_de_matar_el_proceso():
+    """Lo que importa no es el mensaje: es que `listo` se emita.
+
+    Sin esa señal, `_ocupada` se queda en True para siempre y NOVA
+    responde "todavía estoy con lo anterior" a todo lo que le digas
+    después — suponiendo que llegue a haber un después.
+    """
+    from nova.app import _Worker
+    from nova.core.awareness import Awareness
+    from nova.core.conversation import Conversation
+
+    trabajador = _Worker(_AgenteRoto(), Conversation(), Awareness())
+    recibido = []
+    trabajador.listo.connect(lambda t, h, d: recibido.append(t))
+
+    trabajador.procesar("que estoy jugando")
+
+    assert len(recibido) == 1
+    assert recibido[0]
+
+
+def test_una_confirmacion_rota_tampoco_deja_a_nova_colgada():
+    from nova.app import _Worker
+    from nova.core.awareness import Awareness
+    from nova.core.conversation import Conversation
+    from nova.tools import PendingConfirmation
+
+    trabajador = _Worker(_AgenteRoto(), Conversation(), Awareness())
+    recibido = []
+    trabajador.listo.connect(lambda t, h, d: recibido.append(t))
+
+    trabajador.confirmar(PendingConfirmation(tool="files.delete", args={}, summary="borrar"))
+
+    assert len(recibido) == 1

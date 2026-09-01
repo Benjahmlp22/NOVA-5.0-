@@ -8,6 +8,30 @@ que están ahí sin decidir.
 
 ## Lo primero de todo
 
+### ~~NOVA se cierra sola~~ — resuelto el 01/09
+
+Se cerraba en TODAS las órdenes, siempre justo después de entenderlas.
+Se dio por hecho que era un crash nativo, porque el Visor de sucesos
+tenía dos firmas feas (`Qt5Core.dll` 0xc0000409 y `MSVCP140.dll`
+0xc0000005). **No lo era**: esas dos son del 26/08, y de los seis
+cierres del 01/09 Windows no registró ni uno. Una muerte sin evento no
+es un crash nativo.
+
+Era un `TypeError`: al añadir la personalidad de los plugins al prompt,
+`nova/app.py` empezó a llamar a `build_system_prompt()` con tres
+argumentos y la función seguía aceptando dos. Dentro de un slot de Qt,
+que es la única excepción de Python que se lleva el proceso entero por
+delante — PyQt5 llama a `qFatal()`. Nada que ver con el G435.
+
+Lo que queda de aquello, y conviene no quitar:
+
+- `nova/forense.py`: `faulthandler` + `sys.excepthook` + `threading.excepthook`
+  escribiendo a `data/crash.log`. Es lo que hizo visible el traceback.
+- El manejador de mensajes de Qt en `nova/app.py`, por lo mismo.
+- `_Worker.procesar` y `.confirmar` ya no dejan escapar excepciones: un
+  turno roto contesta y libera `_ocupada` en vez de matar el proceso y
+  dejar a NOVA diciendo "todavía estoy con lo anterior" para siempre.
+
 ### Probarla en vivo, de punta a punta
 
 **Nada de lo hecho el 27 de agosto se ha visto correr con micrófono real

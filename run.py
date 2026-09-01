@@ -18,11 +18,19 @@ from __future__ import annotations
 
 import sys
 
-from nova.bootstrap import configurar_logging, parsear_argumentos, preparar_transcriptor
+from nova.bootstrap import (
+    activar_forense,
+    configurar_logging,
+    parsear_argumentos,
+    preparar_transcriptor,
+)
 
 if __name__ == "__main__":
     args = parsear_argumentos(sys.argv[1:])
     configurar_logging(debug=args.debug)
+    # Antes que nada lo demás: si NOVA se va a morir sin traceback, esto
+    # es lo único que lo va a contar. Ver `nova/forense.py`.
+    activar_forense()
 
     transcriptor = preparar_transcriptor()
 

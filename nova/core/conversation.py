@@ -84,10 +84,20 @@ class Conversation:
         return len(self._messages)
 
 
-def build_system_prompt(awareness_block: str = "", memory_hint: str = "") -> str:
+def build_system_prompt(
+    awareness_block: str = "", memory_hint: str = "", personalidad: str = ""
+) -> str:
+    """El prompt de sistema de un turno.
+
+    `personalidad` es lo que aportan los plugins activos, y va AL FINAL a
+    propósito: se lee después de la identidad, así que un plugin puede
+    matizar el carácter de NOVA sin poder borrar las reglas de arriba.
+    """
     partes = [IDENTIDAD]
     if awareness_block:
         partes.append(awareness_block)
     if memory_hint:
         partes.append(f"## Lo que recuerdas de Benja\n{memory_hint}")
+    if personalidad:
+        partes.append(f"## Cómo te comportas ahora mismo\n{personalidad}")
     return "\n\n".join(partes)

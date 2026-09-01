@@ -34,7 +34,16 @@ import sys
 import threading
 import time
 
-from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    QObject,
+    QtCriticalMsg,
+    QtFatalMsg,
+    QThread,
+    QTimer,
+    QtWarningMsg,
+    pyqtSignal,
+    qInstallMessageHandler,
+)
 from PyQt5.QtWidgets import QApplication
 
 from .bootstrap import configurar_logging, parsear_argumentos
@@ -131,6 +140,23 @@ class _Worker(QObject):
         self.plugins = plugins
 
     def procesar(self, mensaje: str) -> None:
+        """Un turno completo. Nunca deja escapar una excepción.
+
+        Esto no es cinturón y tirantes. Un slot de Qt que revienta se
+        lleva el proceso por delante —PyQt5 llama a `qFatal()` y aborta,
+        que es el 0xc0000409 en Qt5Core.dll del Visor de sucesos— y
+        además deja `_ocupada` en True para siempre, así que NOVA se
+        quedaría contestando "todavía estoy con lo anterior" a todo.
+        Pasó de verdad: `build_system_prompt` se quedó sin actualizar al
+        añadir los plugins y NOVA moría en TODAS las órdenes.
+        """
+        try:
+            self._procesar(mensaje)
+        except Exception:
+            log.exception("el turno se rompió: %r", mensaje)
+            self.listo.emit("Me he atascado con eso.", [], False)
+
+    def _procesar(self, mensaje: str) -> None:
         # `memory.para_prompt()` lee un JSON de unos pocos KB; a
         # diferencia del clima, esto sí puede estar en el camino crítico.
         # Los plugins activos añaden su personalidad al final del
@@ -153,9 +179,14 @@ class _Worker(QObject):
         self.listo.emit(respuesta.text, respuesta.tools_used, respuesta.ya_dicho)
 
     def confirmar(self, pendiente: PendingConfirmation) -> None:
-        resultado = self.agent.confirm(pendiente)
-        self.conv.add_assistant(resultado.message)
-        self.listo.emit(resultado.message, [pendiente.tool], False)
+        # Mismo motivo que en `procesar`: esto también es un slot.
+        try:
+            resultado = self.agent.confirm(pendiente)
+            self.conv.add_assistant(resultado.message)
+            self.listo.emit(resultado.message, [pendiente.tool], False)
+        except Exception:
+            log.exception("la confirmación se rompió: %s", pendiente.tool)
+            self.listo.emit("No he podido hacerlo.", [], False)
 
 
 class Nova(QObject):
@@ -650,6 +681,11 @@ class Nova(QObject):
         self._decir(random.choice(SALUDOS), estado="escucha")
 
     def _al_comando(self, texto: str) -> None:
+        # Primera línea que se escribe ya en el hilo de Qt. Marca la
+        # frontera: si el log acaba en «oído» y no llega aquí, lo que
+        # falló fue el salto entre hilos y no el turno.
+        log.debug("comando en el hilo de Qt: %r", texto)
+
         # Mientras está pensando o hablando, lo que llegue NO es un
         # comando nuevo: o es ella misma, o es alguien hablando por
         # encima. Antes se encolaban y NOVA contestaba una detrás de
@@ -844,6 +880,25 @@ class Nova(QObject):
         self._reposo()
 
 
+_NIVEL_QT = {
+    QtWarningMsg: logging.WARNING,
+    QtCriticalMsg: logging.ERROR,
+    QtFatalMsg: logging.CRITICAL,
+}
+
+
+def _mensaje_de_qt(tipo, contexto, texto) -> None:  # noqa: ANN001, ARG001
+    """Lo que Qt dice antes de abortar, al log en vez de a stderr.
+
+    Qt avisa de sus propios errores fatales por su cuenta —"Cannot create
+    children for a parent that is in a different thread", por ejemplo— y
+    lo hace por `stderr`. NOVA se lanza en segundo plano, así que ese
+    aviso no lo lee nadie: el proceso desaparece y el log se queda
+    cortado a media frase, que es justo lo que costó días de diagnóstico.
+    """
+    log.log(_NIVEL_QT.get(tipo, logging.DEBUG), "Qt: %s", texto)
+
+
 def run(args=None, transcriptor: Transcriptor | None = None) -> int:  # noqa: ANN001
     """Punto de entrada: monta la app Qt y entra en el bucle de eventos.
 
@@ -867,6 +922,9 @@ def run(args=None, transcriptor: Transcriptor | None = None) -> int:  # noqa: AN
             vosk_model=CONFIG.vosk_model,
         )
 
+    # Antes de que exista la QApplication: los primeros avisos de Qt
+    # salen durante su construcción.
+    qInstallMessageHandler(_mensaje_de_qt)
     app = QApplication(sys.argv)
     app.setApplicationName("NOVA")
     # Sin ventanas visibles no debe morir: NOVA vive en overlays.

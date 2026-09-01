@@ -31,6 +31,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from . import forense
 from .config import CONFIG
 from .voice.cuda import precargar_runtime
 from .voice.transcriptor import Transcriptor
@@ -112,6 +113,19 @@ def configurar_logging(debug: bool = False, destino: Path | None = None) -> None
 
     if debug:
         log.info("Modo depuración: el detalle va a %s", ruta)
+
+
+def activar_forense() -> Path:
+    """Deja preparado el sitio donde NOVA escribirá su propia muerte.
+
+    Se llama desde `run.py` justo después del logging y ANTES de que
+    PyQt5 exista en el proceso: si la excepción que mata a NOVA es la de
+    un slot de Qt, para cuando llega ya no hay ocasión de instalar nada.
+    El porqué está en `nova/forense.py`.
+    """
+    ruta = forense.activar(CONFIG.data_dir / "crash.log")
+    log.debug("Volcados de fallo: %s", ruta)
+    return ruta
 
 
 def preparar_transcriptor(anunciar: bool = True) -> Transcriptor:
