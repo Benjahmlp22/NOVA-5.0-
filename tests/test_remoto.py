@@ -297,3 +297,53 @@ def test_la_eleccion_es_reproducible():
     a = [t["function"]["name"] for t in elegir_herramientas(todas, "cosa rara sin relacion")]
     b = [t["function"]["name"] for t in elegir_herramientas(todas, "cosa rara sin relacion")]
     assert a == b
+
+
+# ── El OCR de pantalla.leer tumbaba el modo rápido a la 2ª frase ─────
+#
+# En directo, el 02/09: «qué estás viendo en mi pantalla» se comió el
+# límite cuando apenas había habido una frase de charla antes. La causa:
+# pantalla.leer devuelve hasta 4000 caracteres de OCR EN BRUTO —a
+# propósito, para que el modelo lo resuma— y eso entraba entero en la
+# segunda ronda (la que compone la respuesta) junto con el catálogo de
+# esa ronda. Medido: 3215 tokens sólo esa ronda.
+
+def test_un_resultado_enorme_se_recorta_camino_a_la_nube():
+    from nova.llm.remoto import TOPE_RESULTADO_HERRAMIENTA, acotar_resultados
+
+    ocr = "x" * 4000
+    mensajes = acotar_resultados([
+        {"role": "tool", "tool_call_id": "1", "content": ocr},
+    ])
+    assert len(mensajes[0]["content"]) <= TOPE_RESULTADO_HERRAMIENTA + 20
+    assert mensajes[0]["content"].endswith("(recortado)")
+
+
+def test_un_resultado_normal_no_se_toca():
+    """La mayoría de herramientas devuelven una frase corta; no hace
+    falta tocarlas."""
+    from nova.llm.remoto import acotar_resultados
+
+    corto = [{"role": "tool", "tool_call_id": "1", "content": "Son las seis."}]
+    assert acotar_resultados(corto) == corto
+
+
+def test_solo_se_tocan_los_mensajes_de_herramienta():
+    """Un mensaje largo del USUARIO no se recorta: eso sí lo quiere decir
+    entero, y no es lo que costaba caro."""
+    from nova.llm.remoto import acotar_resultados
+
+    largo = "y" * 4000
+    mensajes = acotar_resultados([{"role": "user", "content": largo}])
+    assert mensajes[0]["content"] == largo
+
+
+def test_el_recorte_no_toca_el_mensaje_que_ve_ollama(monkeypatch):
+    """Local no cobra por token: cortarlo ahí sólo empeoraría lo que ve
+    el modelo. `acotar_resultados` sólo se llama camino a la nube."""
+    import inspect
+
+    from nova.llm import ollama
+
+    fuente = inspect.getsource(ollama)
+    assert "acotar_resultados" not in fuente

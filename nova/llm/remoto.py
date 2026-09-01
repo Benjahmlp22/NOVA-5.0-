@@ -135,7 +135,7 @@ class ClienteRemoto:
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": a_openai(messages),
+            "messages": acotar_resultados(a_openai(messages)),
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": on_trozo is not None,
@@ -395,6 +395,44 @@ def elegir_herramientas(
     # reproducible, que importa para poder probarla.
     puntuadas.sort(key=lambda p: (-p[0], p[1]))
     return [t for _, _, t in puntuadas[:tope]]
+
+
+# Cuánto se le deja de un resultado de herramienta al mandarlo a la
+# nube. Ver `acotar_resultados`.
+TOPE_RESULTADO_HERRAMIENTA = 600
+
+
+def acotar_resultados(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recorta lo que devuelven las herramientas, sólo camino a la nube.
+
+    Encontrado el 02/09, en directo: «qué estás viendo en mi pantalla»
+    tumbó el modo rápido a la SEGUNDA frase, cuando `elegir_herramientas`
+    ya debería haber dejado margen para cinco. El motivo es que
+    `pantalla.leer` no es `responde_sola` — a propósito, es material en
+    bruto para que el modelo lo resuma, ver su docstring — y puede
+    devolver hasta 4000 caracteres de OCR. Eso entra en la SEGUNDA ronda
+    (la que compone la respuesta) junto con el catálogo entero de esa
+    ronda: medido, 3215 tokens sólo esa ronda, sobre un presupuesto de
+    8000 por minuto.
+
+    No se toca el mensaje real que ve Ollama —local no cobra por token,
+    y cortarlo ahí sólo empeoraría lo que ve el modelo—, así que esto va
+    aparte de `a_openai` y sólo se llama camino a la nube.
+
+    600 caracteres siguen siendo material de sobra para que el modelo
+    conteste "veo un menú de estación con estas opciones..."; no hace
+    falta el texto entero para redactar un resumen hablado de 1-2 frases.
+    """
+    salida = []
+    for msg in messages:
+        contenido = msg.get("content")
+        if (msg.get("role") == "tool" and isinstance(contenido, str)
+                and len(contenido) > TOPE_RESULTADO_HERRAMIENTA):
+            recortado = contenido[:TOPE_RESULTADO_HERRAMIENTA] + "… (recortado)"
+            salida.append({**msg, "content": recortado})
+        else:
+            salida.append(msg)
+    return salida
 
 
 def relajar_esquemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
