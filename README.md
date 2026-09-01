@@ -1,9 +1,15 @@
 # NOVA 5 — agosto 2026
 
+[![tests](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml/badge.svg)](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml)
+[![licencia: MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
+
 > Sucesora de NOVA4 (julio 2026); NOVA, NOVA3.0-2027 y `nova/` quedan archivadas.
 
 Asistente de escritorio por voz. **Local, gratis y sin nube**: ni API
 keys, ni suscripciones, ni datos saliendo del PC.
+
+Sólo Windows: usa SAPI y las voces OneCore, el OCR de WinRT y pywin32
+para las ventanas y el mezclador de audio.
 
 Dices **"NOVA"**, te escucha, y hace lo que le pides.
 
@@ -21,6 +27,16 @@ Dices **"NOVA"**, te escucha, y hace lo que le pides.
                                ▼
               responde por voz y sigue escuchando
 ```
+
+## Si vienes a tocar el código
+
+Tres archivos, en este orden:
+
+| | |
+|---|---|
+| **[docs/BITACORA.md](docs/BITACORA.md)** | Lo que se midió y por qué se decidió cada cosa. Incluye **lo que se probó y NO funcionó**, para que nadie lo repita. |
+| **[docs/PENDIENTE.md](docs/PENDIENTE.md)** | Lo que falta, y lo que se dejó fuera a propósito con su motivo. |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Cómo se trabaja aquí: medir antes de escribir, todo en español, dónde tocar cada cosa. |
 
 ## Estado
 
