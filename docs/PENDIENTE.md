@@ -91,6 +91,15 @@ inglés, que es lo que CLIP necesita.
 
 ---
 
+## Del repositorio
+
+- **Proteger `main`** cuando el repo pase a público: en privado hace
+  falta GitHub Pro. Settings → Branches, exigiendo el check `probar`.
+- **Antes de hacerlo público**, repasa que el README y la bitácora
+  llevan datos del PC de referencia (627 archivos en Descargas, 16.699
+  imágenes, el hardware) como justificación de las decisiones. Son
+  útiles técnicamente, pero son tuyos.
+
 ## Cómo medir lo que toques
 
 Todo lo del proyecto está decidido con números, y hay bancos de pruebas

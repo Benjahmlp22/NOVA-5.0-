@@ -69,6 +69,10 @@ Si te sale un commit que toca cinco cosas distintas, sepáralo.
 
 `main` siempre verde: tests en verde y `ruff` limpio.
 
+De momento eso es un acuerdo, no una regla del servidor: proteger ramas
+en un repo privado necesita GitHub Pro. Si algún día se hace público,
+actívalo en Settings → Branches y exige que pase el check `probar`.
+
 Todo lo demás en una rama por tema, y se borra al fusionar:
 
 ```
