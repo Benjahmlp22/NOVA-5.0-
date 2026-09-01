@@ -314,6 +314,17 @@ class Config:
             _env("NOVA_PROYECTOS", str(Path.home() / "Desktop" / "proyectos"))
         )
     )
+    # El Escritorio DE VERDAD, no una carpeta interna con ese nombre.
+    #
+    # Sale de un fallo en vivo el 02/09: pedido "en el escritorio", el
+    # modelo llamó a `folder.create`, que escribe dentro de
+    # `nova/workspace/` — creó `workspace/Escritorio/FlappyGame`, una
+    # carpeta que Benja jamás iba a ver porque vive dentro del propio
+    # proyecto de NOVA, no en su Windows. Con `codigo.escribir(...,
+    # escritorio=True)` el nuevo proyecto se crea aquí directamente.
+    escritorio_dir: Path = field(
+        default_factory=lambda: Path(_env("NOVA_ESCRITORIO", str(Path.home() / "Desktop")))
+    )
     # Cuánto se le deja correr a un script antes de matarlo. Uno que se
     # queda esperando input() no termina nunca, y NOVA se quedaría
     # colgada en "pensando" para siempre. Noventa segundos dan de sobra

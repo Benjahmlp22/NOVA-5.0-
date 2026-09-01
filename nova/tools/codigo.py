@@ -137,6 +137,11 @@ def _resolver(nombre: str, estricto: bool = False) -> Path | None:
     parte del nombre del proyecto ("nodika" → "nodika-motor"), nunca al
     revés. Si no encaja, no hay proyecto: se creará uno nuevo, que es lo
     que se había pedido.
+
+    Lo que se hizo con `escritorio=True` también se busca aquí — para
+    poder decir "ábreme el juego del escritorio" sin repetir la ruta —
+    pero sólo entre las carpetas que YA hay directamente en el
+    Escritorio, sin bajar más adentro ni meterlas en `codigo.proyectos`.
     """
     clave = _normalizar(nombre)
     if not clave:
@@ -150,12 +155,33 @@ def _resolver(nombre: str, estricto: bool = False) -> Path | None:
         ruta for k, ruta in todos.items()
         if clave in k or (not estricto and k in clave)
     ]
+    if not candidatos:
+        candidatos = list(_en_escritorio(clave, estricto=estricto).values())
     if len(candidatos) == 1:
         return candidatos[0]
     if candidatos:
         # Varios: gana el de nombre más parecido en longitud.
         return min(candidatos, key=lambda p: abs(len(_normalizar(p.name)) - len(clave)))
     return None
+
+
+def _en_escritorio(clave: str, *, estricto: bool = False) -> dict[str, Path]:
+    """Carpetas del Escritorio real cuyo nombre encaja, sin indexar nada.
+
+    A propósito NO se mete en `proyectos()`: lo que hay en el Escritorio
+    de Benja es suyo, no un catálogo de NOVA, y `codigo.proyectos` no
+    tiene por qué listar sus accesos directos y sus otras carpetas.
+    """
+    try:
+        hijos = [h for h in CONFIG.escritorio_dir.iterdir() if h.is_dir()]
+    except OSError:
+        return {}
+    return {
+        _normalizar(h.name): h for h in hijos
+        if clave == _normalizar(h.name)
+        or clave in _normalizar(h.name)
+        or (not estricto and _normalizar(h.name) in clave)
+    }
 
 
 def _no_lo_encuentro(nombre: str) -> ToolResult:
@@ -167,17 +193,27 @@ def _no_lo_encuentro(nombre: str) -> ToolResult:
     )
 
 
-def _dentro(ruta: Path) -> bool:
-    """¿Está de verdad bajo la raíz de proyectos?
+def _dentro(ruta: Path, raiz: Path | None = None) -> bool:
+    """¿Está de verdad bajo la raíz de proyectos (o la que se pase)?
 
     Se comprueba resuelto: `proyectos/x/../../../Windows` no es un
     proyecto por mucho que empiece por la raíz.
     """
     try:
-        ruta.resolve().relative_to(CONFIG.proyectos_dir.resolve())
+        ruta.resolve().relative_to((raiz or CONFIG.proyectos_dir).resolve())
         return True
     except (ValueError, OSError):
         return False
+
+
+def _dentro_conocido(ruta: Path) -> bool:
+    """Lo mismo, pero aceptando la carpeta de proyectos O el Escritorio.
+
+    `_resolver` ya puede devolver una carpeta del Escritorio (ver
+    `_en_escritorio`), así que leer, editar o ejecutar algo de ahí no
+    puede rechazarse sólo por no vivir bajo `proyectos/`.
+    """
+    return _dentro(ruta, CONFIG.proyectos_dir) or _dentro(ruta, CONFIG.escritorio_dir)
 
 
 # ── Mirar ────────────────────────────────────────────────────────────
@@ -254,7 +290,7 @@ def ver(proyecto: str, archivo: str, desde: int = 0, hasta: int = 0) -> ToolResu
             )
         destino = min(coincidencias, key=lambda f: len(f.name))
 
-    if not _dentro(destino):
+    if not _dentro_conocido(destino):
         return ToolResult(ok=False, message="Esa ruta se sale de tus proyectos.")
     try:
         texto = destino.read_text(encoding="utf-8", errors="replace")
@@ -359,11 +395,18 @@ _EXTENSIONES = frozenset({
 
 
 def escribir(proyecto: str, archivo: str, contenido: str,
-             sobrescribir: bool = False) -> ToolResult:
+             sobrescribir: bool = False, escritorio: bool = False) -> ToolResult:
     """Crea o reemplaza un archivo de código dentro de un proyecto.
 
     Si el proyecto no existe, se crea: «hazme un juego de la serpiente»
     no puede exigir que la carpeta ya estuviera.
+
+    `escritorio=True` lo crea en el Escritorio DE VERDAD y no dentro de
+    `proyectos/`. Existe porque probado en vivo el modelo, ante "en el
+    escritorio", llamaba a `folder.create` —que escribe en
+    `nova/workspace/`, invisible para Benja— y encima eso obligaba a una
+    SEGUNDA vuelta a la API para redactar la respuesta, que es lo que se
+    comió el resto del presupuesto de tokens de la nube.
 
     No sobrescribe por defecto. Un modelo que se equivoca de nombre y
     machaca el `index.html` de un proyecto de verdad es un fallo del que
@@ -379,24 +422,38 @@ def escribir(proyecto: str, archivo: str, contenido: str,
                     "Sólo código y texto.",
         )
 
-    # Estricto: escribir en el proyecto equivocado es peor que crear uno
-    # de más. Ver el docstring de `_resolver`.
-    carpeta = _resolver(proyecto, estricto=True)
-    creado_ahora = False
-    if carpeta is None:
-        # Proyecto nuevo. Se crea en la raíz, que es donde Benja ya tiene
-        # varios sueltos; meterlo en una de sus carpetas numeradas sería
-        # adivinar en cuál.
+    if escritorio:
+        # Directo al Escritorio: no se busca entre los proyectos ya
+        # existentes, porque pedir "en el escritorio" es pedir uno nuevo
+        # y visible, no reutilizar uno que ya estuviera enterrado.
         limpio = re.sub(r"[^\w\- ]+", "", proyecto or "").strip()
         if not limpio:
-            return ToolResult(ok=False, message="¿Cómo se llama el proyecto?")
-        carpeta = CONFIG.proyectos_dir / limpio
+            return ToolResult(ok=False, message="¿Cómo se llama la carpeta?")
+        carpeta = CONFIG.escritorio_dir / limpio
+        raiz = CONFIG.escritorio_dir
+        creado_ahora = not carpeta.is_dir()
         carpeta.mkdir(parents=True, exist_ok=True)
-        creado_ahora = True
+    else:
+        # Estricto: escribir en el proyecto equivocado es peor que crear
+        # uno de más. Ver el docstring de `_resolver`.
+        carpeta = _resolver(proyecto, estricto=True)
+        raiz = CONFIG.proyectos_dir
+        creado_ahora = False
+        if carpeta is None:
+            # Proyecto nuevo. Se crea en la raíz, que es donde Benja ya
+            # tiene varios sueltos; meterlo en una de sus carpetas
+            # numeradas sería adivinar en cuál.
+            limpio = re.sub(r"[^\w\- ]+", "", proyecto or "").strip()
+            if not limpio:
+                return ToolResult(ok=False, message="¿Cómo se llama el proyecto?")
+            carpeta = CONFIG.proyectos_dir / limpio
+            carpeta.mkdir(parents=True, exist_ok=True)
+            creado_ahora = True
 
     destino = carpeta / nombre_archivo
-    if not _dentro(destino):
-        return ToolResult(ok=False, message="Esa ruta se sale de tus proyectos.")
+    if not _dentro(destino, raiz):
+        destino_esperado = "el Escritorio" if escritorio else "tus proyectos"
+        return ToolResult(ok=False, message=f"Esa ruta se sale de {destino_esperado}.")
     if destino.exists() and not sobrescribir:
         return ToolResult(
             ok=False,
@@ -411,11 +468,13 @@ def escribir(proyecto: str, archivo: str, contenido: str,
         return ToolResult(ok=False, message=f"No pude escribirlo: {exc}")
 
     lineas = len((contenido or "").splitlines()) or 1
+    donde = f"en {carpeta.name}, dentro de tu Escritorio" if escritorio else f"en {carpeta.name}"
     hecho = "He creado el proyecto y" if creado_ahora else "He"
     return ToolResult(
         ok=True,
-        message=f"{hecho} escrito {nombre_archivo} en {carpeta.name}, {lineas} líneas.",
-        data={"ruta": str(destino), "proyecto": carpeta.name, "lineas": lineas},
+        message=f"{hecho} escrito {nombre_archivo} {donde}, {lineas} líneas.",
+        data={"ruta": str(destino), "proyecto": carpeta.name, "lineas": lineas,
+              "escritorio": escritorio},
     )
 
 
@@ -425,7 +484,7 @@ def abrir(proyecto: str, archivo: str = "index.html") -> ToolResult:
     if carpeta is None:
         return _no_lo_encuentro(proyecto)
     destino = carpeta / (archivo or "index.html").strip()
-    if not destino.is_file() or not _dentro(destino):
+    if not destino.is_file() or not _dentro_conocido(destino):
         return ToolResult(
             ok=False, message=f"No encuentro «{archivo}» en {carpeta.name}."
         )
@@ -466,7 +525,7 @@ def editar(proyecto: str, archivo: str, buscar_texto: str,
         return ToolResult(ok=False, message="¿Qué parte quieres que cambie?")
 
     destino = carpeta / (archivo or "").strip()
-    if not destino.is_file() or not _dentro(destino):
+    if not destino.is_file() or not _dentro_conocido(destino):
         return ToolResult(
             ok=False, message=f"No encuentro «{archivo}» en {carpeta.name}."
         )
@@ -669,7 +728,7 @@ def ejecutar(proyecto: str, archivo: str = "", comando: str = "",
         etiqueta = comando.strip()
     elif archivo.strip():
         destino = carpeta / archivo.strip()
-        if not destino.is_file() or not _dentro(destino):
+        if not destino.is_file() or not _dentro_conocido(destino):
             return ToolResult(
                 ok=False, message=f"No encuentro «{archivo}» dentro de {carpeta.name}."
             )
@@ -881,8 +940,11 @@ def register(reg) -> None:  # noqa: ANN001
         name="codigo.escribir",
         description=(
             "ESCRIBE código: crea o reemplaza un archivo dentro de un proyecto suyo, "
-            "y crea el proyecto si no existe. Es la de «hazme un juego en HTML», "
-            "«créame una página», «escribe un script». Tú generas el contenido entero"
+            "y crea el proyecto si no existe — NUNCA llames a folder.create ni "
+            "file.create antes, ésta ya se encarga sola. Es la de «hazme un juego "
+            "en HTML», «créame una página», «escribe un script». Tú generas el "
+            "contenido entero. Con escritorio=true lo pone en el Escritorio DE "
+            "VERDAD en vez de en la carpeta de proyectos — úsalo si lo pide así"
         ),
         handler=escribir,
         schema={
@@ -892,6 +954,7 @@ def register(reg) -> None:  # noqa: ANN001
                 "archivo": {"type": "string"},
                 "contenido": {"type": "string"},
                 "sobrescribir": {"type": "boolean"},
+                "escritorio": {"type": "boolean"},
             },
             "required": ["proyecto", "archivo", "contenido"],
         },

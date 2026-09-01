@@ -35,8 +35,11 @@ def proyectos(tmp_path, monkeypatch):
     hondo.mkdir(parents=True)
     (hondo / "package.json").write_text("{}", encoding="utf-8")
 
+    escritorio = tmp_path / "Escritorio"
+    escritorio.mkdir()
     monkeypatch.setattr(
-        codigo, "CONFIG", SimpleNamespace(proyectos_dir=raiz, codigo_timeout=15.0)
+        codigo, "CONFIG",
+        SimpleNamespace(proyectos_dir=raiz, escritorio_dir=escritorio, codigo_timeout=15.0),
     )
     # Por defecto, PC libre: cada prueba que quiera un juego lo pone.
     monkeypatch.setattr(codigo, "_hay_sitio", lambda igualmente: None)
@@ -119,7 +122,9 @@ def test_dentro_rechaza_lo_de_fuera(proyectos, tmp_path):
 def test_un_script_que_no_termina_se_corta(proyectos, monkeypatch):
     """Sin esto NOVA se queda en «pensando» para siempre."""
     monkeypatch.setattr(
-        codigo, "CONFIG", SimpleNamespace(proyectos_dir=proyectos, codigo_timeout=1.0)
+        codigo, "CONFIG",
+        SimpleNamespace(proyectos_dir=proyectos, escritorio_dir=proyectos / "_desktop_falso",
+                        codigo_timeout=1.0),
     )
     t0 = time.monotonic()
     r = codigo.ejecutar(
@@ -414,3 +419,56 @@ def test_editar_tampoco_se_sale_de_la_carpeta(proyectos):
     r = codigo.editar("conversor", "../../../../algo.txt", "a", "b")
     assert not r.ok
     assert "No encuentro" in r.message
+
+
+# ── "En el escritorio" va al Escritorio DE VERDAD ────────────────────
+#
+# En directo, el 02/09: pedido "en el escritorio", el modelo llamaba a
+# `folder.create` -que escribe en nova/workspace/, invisible para
+# Benja- y encima eso forzaba una SEGUNDA vuelta a la API para redactar
+# la respuesta, que fue lo que agotó el resto del presupuesto de tokens
+# de la nube. Estos tests cubren la ruta que reemplaza a ese camino.
+
+def test_escritorio_crea_en_el_escritorio_real(proyectos):
+    r = codigo.escribir("PongPrueba", "index.html", "<h1>pong</h1>", escritorio=True)
+    assert r.ok
+    assert r.data["escritorio"] is True
+    destino = codigo.CONFIG.escritorio_dir / "PongPrueba" / "index.html"
+    assert destino.is_file()
+    assert "pong" in destino.read_text(encoding="utf-8")
+    # Y NO ha tocado la carpeta normal de proyectos.
+    assert not (proyectos / "PongPrueba").exists()
+
+
+def test_sin_escritorio_sigue_yendo_a_proyectos_como_siempre(proyectos):
+    r = codigo.escribir("normal", "index.html", "<h1>x</h1>")
+    assert r.ok
+    assert r.data["escritorio"] is False
+    assert (proyectos / "normal" / "index.html").is_file()
+
+
+def test_lo_del_escritorio_tambien_se_puede_leer_y_abrir(proyectos):
+    codigo.escribir("PongPrueba", "index.html", "<h1>pong</h1>", escritorio=True)
+
+    # _resolver lo encuentra sin haber pasado por escritorio=True otra vez.
+    encontrado = codigo._resolver("pongprueba")
+    assert encontrado == codigo.CONFIG.escritorio_dir / "PongPrueba"
+
+    r = codigo.ver("PongPrueba", "index.html")
+    assert r.ok
+    assert "pong" in r.message
+
+
+def test_el_escritorio_no_se_cuela_en_codigo_proyectos(proyectos):
+    """Lo del Escritorio de Benja es suyo, no un catálogo de NOVA."""
+    codigo.escribir("PongPrueba", "index.html", "<h1>pong</h1>", escritorio=True)
+    todos = codigo.proyectos()
+    assert "pongprueba" not in todos
+
+
+def test_escritorio_tampoco_se_sale_de_si_mismo(proyectos):
+    r = codigo.escribir("../../../../fuera", "x.html", "<h1>no</h1>", escritorio=True)
+    # El nombre se limpia de caracteres raros, así que esto crea una
+    # carpeta llamada literalmente sin los puntos y barras, no escapa.
+    assert r.ok
+    assert not (codigo.CONFIG.escritorio_dir.parent / "fuera").exists()

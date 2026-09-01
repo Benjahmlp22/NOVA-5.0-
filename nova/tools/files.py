@@ -118,7 +118,11 @@ def screenshot() -> ToolResult:
 def register(reg) -> None:  # noqa: ANN001
     reg.register(Tool(
         name="file.create",
-        description="Crea un archivo de texto en la carpeta de trabajo",
+        description=(
+            "Crea un archivo de texto en los APUNTES internos de NOVA. NO es el "
+            "Escritorio real ni se ve fuera de aquí — para código, juegos o "
+            "cualquier cosa que Benja tenga que ENCONTRAR, usa codigo.escribir"
+        ),
         handler=create_file,
         schema={
             "type": "object",
@@ -132,7 +136,12 @@ def register(reg) -> None:  # noqa: ANN001
     ))
     reg.register(Tool(
         name="folder.create",
-        description="Crea una carpeta en la carpeta de trabajo",
+        description=(
+            "Crea una carpeta en los APUNTES internos de NOVA. NO es el Escritorio "
+            "real: Benja no la ve. Para un proyecto o un juego usa SOLO "
+            "codigo.escribir, que ya crea su propia carpeta — llamar a ésta a la "
+            "vez es tiempo y tokens tirados"
+        ),
         handler=create_folder,
         schema={
             "type": "object",
