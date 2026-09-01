@@ -46,6 +46,7 @@ parecían valer la pena.
 
 | idea | por qué | dificultad |
 |---|---|---|
+| Tienda de plugins | hoy se instalan copiando la carpeta en `data/plugins`. Un catálogo en un repo público bastaría: cero claves, cero cuentas | media |
 | Renombrar archivos por voz | "renombra la factura a factura-luz" no existe hoy | baja |
 | Modo reunión | callarse sola cuando detecta Discord/Teams con el micro en uso | media |
 | Historial consultable en el panel | ahora sólo se ve el último turno | media |
@@ -84,6 +85,15 @@ quieto. Un cajón de sastre mueve el problema, no lo resuelve.
 **`torch`.** Son 2.5 GB para *ejecutar* un modelo ya entrenado.
 `onnxruntime` lo hace en 31 ms por imagen. Si alguien propone traerlo,
 que traiga también la medida de qué mejora.
+
+**Prometer que los plugins son seguros.** No lo son y no pueden serlo:
+Python no encierra código ajeno. Lo que hay es declaración de permisos,
+el código a la vista y un revisor de descuidos. Si alguien añade una
+«caja de arena», que traiga primero la prueba de que aguanta.
+
+**Firebase para la tienda de plugins.** Choca con la regla número 7
+(«ni API keys, ni datos saliendo del PC»). Un catálogo en un repo
+público hace lo mismo sin cuentas ni claves.
 
 **Traducir las consultas de imagen con el LLM.** No hace falta: el
 modelo que decide llamar a `imagen.buscar` ya rellena el argumento en

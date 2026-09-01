@@ -225,6 +225,79 @@ síntoma de un prompt truncado no se parece en nada a su causa.
 
 ---
 
+## 1 de septiembre — plugins y reparto de recursos
+
+### El reparto: un vigilante para toda la máquina
+
+Antes sólo se miraba la VRAM, y sólo para cambiar de modelo. Faltaba
+todo lo demás: podías estar jugando y NOVA seguir indexando 16.699
+imágenes con ocho hilos.
+
+Ahora `nova/recursos.py` mide CPU, RAM, VRAM y si hay un juego a
+pantalla completa, y dice **holgado**, **justo** o **apretado**. Todo lo
+caro pregunta antes de ponerse.
+
+Los umbrales son medidos, no copiados:
+
+| umbral | valor | de dónde sale |
+|---|---|---|
+| CPU «justo» | 70 % | con los 12 hilos al tope, sintetizar una frase pasa de 11 ms a **1909 ms** |
+| VRAM «justo» | 85 % | el punto en que Ollama deja parte del modelo fuera de la tarjeta |
+| juego delante | — | cuenta como apretado aunque los números den bien: los fotogramas son suyos |
+
+Con el juego abierto, pedirle que repase las imágenes ahora contesta:
+«Ahora no: tienes StarCitizen a pantalla completa… Dímelo cuando cierres
+StarCitizen». Y si te pones a jugar a mitad del repaso, se para sola.
+
+**Un fallo que salió al probarlo:** la primera medición decía «CPU al 0
+por ciento» con la máquina al 90. `cpu_percent(interval=None)` mide
+desde la llamada anterior, y sin una anterior devuelve 0.0. Cebar el
+contador y preguntar acto seguido no basta, porque no ha pasado tiempo.
+La primera vez usa una ventana de 150 ms.
+
+### Plugins: lo que este sistema NO promete
+
+Un plugin con código Python corre con los permisos del usuario. **Python
+no tiene forma real de encerrar código ajeno.** No hay caja de arena, y
+quien diga lo contrario está vendiendo humo.
+
+Así que aquí no se promete seguridad, se hace algo más modesto: el
+plugin declara lo que necesita, se le enseña al usuario en castellano
+antes de activarlo, el código se lee entero dentro del panel, y un
+revisor avisa de lo que huele mal.
+
+El revisor analiza el **árbol sintáctico**, no el texto: buscando
+palabras, un comentario que diga «nunca uses eval» daría un susto.
+
+Probado contra código malicioso escrito a mano: caza `rmtree`, `eval`,
+`subprocess`, `socket` y `shutil`. En la primera versión **se le coló**
+`getattr(__builtins__, "e" + "val")`, que es el ofuscado de manual —
+ahí `__builtins__` es un `Name` y no un `Attribute`, y sólo se miraban
+los `Attribute`. Ahora se caza por dos vías. En el panel pone que esto
+es un detector de descuidos y no un antivirus.
+
+**La distinción que hace todo el trabajo:** un plugin de sólo datos
+(personalidad, voz, frases) es imposible que haga daño y se activa con
+un clic. Uno con código pide leerlo antes, y **por voz no se activa**:
+decir un nombre de pasada no es consentimiento informado para ejecutar
+código de otra persona.
+
+Nada se ejecuta al arrancar. Importar un módulo YA ejecuta su cuerpo,
+así que el código sólo se importa si el plugin está activo, pidió el
+permiso, y lo activaste tú.
+
+### Y una cosa que resultó no estar rota
+
+Se reportó que NOVA «no ve la pantalla». Probado con seis formas de
+pedirlo, cinco llaman a `pantalla.leer` y contestan bien («Tienes
+delante Star Citizen, la misión JUNIOR RANK en el CARGO HALL»). Lo que
+fallaba era el `num_ctx` de la entrada anterior: con el prompt cortado,
+la elección de herramienta era un desastre.
+
+**Antes de arreglar algo, comprueba que sigue roto.**
+
+---
+
 ## Cosas que se probaron y NO funcionaron
 
 Guardadas para que nadie las repita.
@@ -242,6 +315,9 @@ Guardadas para que nadie las repita.
 - **Culpar al tamaño del catálogo de herramientas.** Medido: 17/20 con
   27 herramientas y 17/20 con 48, con los mismos fallos. El problema
   estaba en `num_ctx`.
+- **Buscar patrones peligrosos en el código como texto.** Un comentario
+  que diga «no uses eval» daba un aviso. Hay que analizar el árbol
+  sintáctico.
 - **Medir latencia cronometrando desde fuera.** El ruido de la máquina
   es mayor que el efecto. Dos medidas del mismo cambio dieron +230 ms y
   +408 ms; el valor real era 0. Usa `prompt_eval_count` y

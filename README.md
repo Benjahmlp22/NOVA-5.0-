@@ -135,7 +135,9 @@ temporizadores.
 **Ver.** Leer el **texto que hay en pantalla** cuando no se puede copiar
 · buscar una imagen tuya **por lo que se ve en ella**, no por su nombre.
 
-**Ella misma.** Cambiarse la voz y la velocidad si se lo pides.
+**Ella misma.** Cambiarse la voz y la velocidad si se lo pides · abrir
+el **panel de plugins** para que la personalices · decirte por qué va
+lenta y qué está dejando para luego.
 
 **Internet.** Buscar sin API keys y abrirte un enlace.
 
@@ -401,6 +403,74 @@ corta a mitad de frase, porque una coma ya da 0.4 s de pausa.
 **Las órdenes con herramienta (hasta 3.3 s).** Ahí el suelo lo pone la
 herramienta, no el modelo: buscar en internet son 2 s de red que no se
 pueden acelerar desde aquí.
+
+## Plugins
+
+Un plugin es una carpeta con un `plugin.json` y, si hace falta, un
+`plugin.py`. Puede cambiar la personalidad de NOVA, su voz, sus frases,
+y —si trae código— añadirle cosas nuevas que sabe hacer.
+
+Se abre diciéndole **«abre los plugins»**.
+
+Vienen cuatro de ejemplo: **Seca** (respuestas al grano), **Modo
+partida** (frases cortas y voz rápida), **Mayordomo** (te trata de
+usted) y **Programadora**, que es el único con código y explica errores
+de Python por su causa típica.
+
+### Lo que este sistema NO promete
+
+Un plugin con código Python **corre con tus permisos**: puede leer tus
+archivos, borrarlos o mandarlos por internet. Python no tiene forma real
+de encerrar código ajeno — no hay caja de arena que valga.
+
+Así que aquí no se promete seguridad, se hace algo más modesto:
+
+1. El plugin **declara** lo que necesita. Sin declararlo, no se le da.
+2. Se te enseña **en castellano** antes de activarlo, con los permisos
+   delicados en ámbar.
+3. **El código se lee entero** dentro del propio panel.
+4. Un revisor avisa de lo que huele mal: `eval`, `subprocess`, `socket`,
+   `rmtree`… Analiza el árbol sintáctico y no el texto, porque buscando
+   palabras un comentario que diga «no uses eval» daría un susto.
+
+El revisor **no es un antivirus** y el panel lo dice. Probado contra
+código malicioso escrito a mano: caza lo evidente, y en la primera
+versión se le coló `getattr(__builtins__, "e" + "val")`, que es el
+ofuscado de manual. Ahora también, pero quien quiera esconder algo puede.
+
+**La distinción que hace todo el trabajo:** un plugin de sólo datos
+(personalidad, voz, frases) es imposible que haga daño y se activa con un
+clic. Uno con código pide leerlo antes, y **por voz no se activa**: decir
+un nombre de pasada no es consentimiento informado para ejecutar código
+de otra persona.
+
+Nada se ejecuta al arrancar. Importar un módulo YA ejecuta su cuerpo,
+así que el código sólo se importa si el plugin está activo, pidió el
+permiso, y lo activaste tú.
+
+## Cuando el PC no da para todo
+
+NOVA compite por la misma máquina que lo que estés haciendo. Un
+vigilante (`nova/recursos.py`) mide CPU, RAM, VRAM y si hay un juego a
+pantalla completa, y decide en qué modo va:
+
+| modo | qué hace |
+|---|---|
+| holgado | lo que quiera |
+| justo | lo pesado, con la mitad de hilos |
+| apretado | lo pesado se espera; sólo lo que acabas de pedir |
+
+Los umbrales están medidos aquí, no copiados de ningún sitio: **CPU al
+70 %** porque ahí sintetizar una frase pasa de 11 ms a **1909 ms**, y
+**VRAM al 85 %** porque es donde Ollama empieza a dejar el modelo fuera
+de la tarjeta.
+
+Un juego a pantalla completa cuenta como apretado aunque los números den
+bien: los fotogramas son suyos. Con Star Citizen abierto, pedirle que
+repase las imágenes contesta *«Ahora no… dímelo cuando cierres Star
+Citizen»*, y si te pones a jugar a mitad del repaso, se para sola.
+
+Y puedes preguntarle **«¿por qué vas lenta?»**.
 
 ## Ver: la pantalla y tus imágenes
 
@@ -693,6 +763,8 @@ nova/
     polish.py       limpieza de tics y longitud de la voz
   llm/ollama.py     cliente del modelo local
   winrt.py          puente a PowerShell para lo que sólo da WinRT
+  recursos.py       cuánto sitio hay y cuánto puede ocupar NOVA
+  plugins/          manifiesto, revisión del código y gestor
   vista/
     ocr.py          leer el texto de la pantalla (OCR de Windows)
     clip.py         imágenes y frases como vectores comparables
@@ -705,7 +777,7 @@ nova/
     chime.py        sonido de activación
   tools/            lo que NOVA sabe hacer + permisos
   ui/               orbe, borde de pantalla
-tests/              496 tests, sin red ni micrófono
+tests/              545 tests, sin red ni micrófono
 ```
 
 ## Tests
