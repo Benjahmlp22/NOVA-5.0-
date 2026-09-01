@@ -232,6 +232,12 @@ class Nova(QObject):
 
     _procesar = pyqtSignal(str)
     _confirmar = pyqtSignal(object)
+    # Las herramientas corren en el HILO TRABAJADOR, no en el de Qt. Dos
+    # de ellas tocan la interfaz —abrir el panel de plugins crea un
+    # QWidget, y cambiar de cerebro repinta el indicador— así que van por
+    # señal como todo lo demás. Ver el fallo de abajo.
+    _abrir_plugins = pyqtSignal()
+    _cambiar_cerebro = pyqtSignal(str)
 
     # VoiceListener y Speaker llaman a sus callbacks desde SUS PROPIOS
     # hilos (no el de Qt). Tocar un QWidget desde ahí es exactamente lo
@@ -372,6 +378,8 @@ class Nova(QObject):
         self._worker.estado.connect(self._al_estado)
         self._worker.frase.connect(self._al_frase)
         self._worker.cayo_el_remoto.connect(self.caerse_a_local)
+        self._abrir_plugins.connect(self.abrir_panel_plugins)
+        self._cambiar_cerebro.connect(self._preferir_cerebro_en_qt)
 
         self._pendientes: list[PendingConfirmation] = []
         self._ocupada = False
@@ -410,7 +418,8 @@ class Nova(QObject):
         # cambia de voz es él, no el registro.
         voz.conectar(self.speaker)
         voz.aplicar_guardado(self.speaker)
-        tool_plugins.conectar(self.plugins, self.abrir_panel_plugins)
+        # `.emit` y no el método: lo llama el hilo trabajador.
+        tool_plugins.conectar(self.plugins, self._abrir_plugins.emit)
         cerebro.conectar(self)
         self._aplicar_voz_de_plugins()
 
@@ -493,6 +502,15 @@ class Nova(QObject):
 
     def preferir_cerebro(self, cual: str) -> None:
         """Lo que Benja ha pedido: "rapido", "local" o "" para que decida ella.
+
+        La llama una herramienta, o sea el HILO TRABAJADOR, y aplicar el
+        cambio repinta el indicador del panel. Así que aquí sólo se emite
+        la señal y el trabajo real ocurre en el hilo de Qt.
+        """
+        self._cambiar_cerebro.emit(cual)
+
+    def _preferir_cerebro_en_qt(self, cual: str) -> None:
+        """Ya en el hilo de Qt: se puede tocar la interfaz.
 
         No se guarda en disco a propósito. Encender la nube es dar
         permiso para que lo que dices salga del ordenador, y un permiso
@@ -675,7 +693,20 @@ class Nova(QObject):
     # ── Plugins ──────────────────────────────────────────────────────
 
     def abrir_panel_plugins(self) -> None:
-        """Abre el panel. Se llama desde el hilo de la interfaz.
+        """Abre el panel. SÓLO desde el hilo de Qt, por señal.
+
+        El docstring decía "se llama desde el hilo de la interfaz" y era
+        mentira: quien lo llamaba era la herramienta `plugins.abrir`, que
+        corre en el hilo trabajador. Construir ahí un QWidget mató a NOVA
+        el 01/09 diciendo «abre tu panel», con el aviso de Qt que ahora
+        sí queda en el log:
+
+            QObject: Cannot create children for a parent that is in a
+            different thread.
+
+        Es exactamente el fallo contra el que avisa la cabecera de este
+        módulo. Por eso la herramienta recibe `_abrir_plugins.emit` y no
+        este método.
 
         La ventana se guarda: abrirla dos veces trae al frente la que ya
         estaba en vez de apilar copias.

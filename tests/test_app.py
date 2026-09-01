@@ -474,3 +474,47 @@ def test_caerse_a_local_estando_ya_en_local_no_hace_nada():
     n.caerse_a_local("lo que sea")
     # No ha tocado la preferencia: no había nada que arreglar.
     assert n._preferencia_cerebro == "rapido"
+
+
+# ── Nada que pinte se llama desde el hilo trabajador ─────────────────
+#
+# Las herramientas corren en el hilo trabajador. Dos de ellas tocaban la
+# interfaz directamente y una mató a NOVA el 01/09 diciendo «abre tu
+# panel»: construir un QWidget fuera del hilo de Qt es fatal, y el log
+# lo dijo con todas las letras — "QObject: Cannot create children for a
+# parent that is in a different thread".
+
+class _SenalFalsa:
+    def __init__(self) -> None:
+        self.emitido: list = []
+
+    def emit(self, *args) -> None:  # noqa: ANN002
+        self.emitido.append(args)
+
+
+def test_cambiar_de_cerebro_no_toca_la_interfaz_desde_la_herramienta():
+    """`preferir_cerebro` la llama una herramienta: sólo puede emitir."""
+    class _N:
+        preferir_cerebro = Nova.preferir_cerebro
+
+        def __init__(self) -> None:
+            self._cambiar_cerebro = _SenalFalsa()
+            self._preferencia_cerebro = ""
+
+    n = _N()
+    n.preferir_cerebro("rapido")
+
+    assert n._cambiar_cerebro.emitido == [("rapido",)]
+    # Y NO ha aplicado nada por su cuenta: eso pasa ya en el hilo de Qt.
+    assert n._preferencia_cerebro == ""
+
+
+def test_el_trabajo_de_verdad_sigue_estando_al_otro_lado():
+    """Lo que hace el cambio vive aparte, y es lo que escucha la señal."""
+    n = _NovaConNube()
+    n._en_remoto = False
+    n._preferir_cerebro_en_qt = Nova._preferir_cerebro_en_qt.__get__(n)
+
+    n._preferir_cerebro_en_qt("rapido")
+    assert n._preferencia_cerebro == "rapido"
+    assert n._en_remoto
