@@ -152,7 +152,41 @@ def close_app(name: str) -> ToolResult:
     return ToolResult(ok=True, message=f"He cerrado {name} ({cerrados} proceso(s)).")
 
 
+# El vigilante se comparte: medir la VRAM llama a nvidia-smi y no tiene
+# sentido hacerlo dos veces seguidas desde sitios distintos.
+_vigilante = None
+
+
+def carga() -> ToolResult:
+    """Cómo de cargado está el PC y qué está dejando NOVA para luego.
+
+    Distinto de `pc.status`, que dice los números. Esto dice la
+    CONSECUENCIA: por qué va lenta ahora mismo y qué no va a hacer.
+    """
+    global _vigilante  # noqa: PLW0603
+    if _vigilante is None:
+        from ..recursos import Vigilante
+
+        _vigilante = Vigilante()
+
+    estado = _vigilante.estado(forzar=True)
+    frase = estado.en_una_frase()
+    if estado.modo() == "apretado":
+        frase += " Lo pesado, como repasar imágenes, lo dejo para cuando se despeje."
+    return ToolResult(ok=True, message=frase, data={"modo": estado.modo()})
+
+
 def register(reg) -> None:  # noqa: ANN001
+    reg.register(Tool(
+        name="pc.carga",
+        description=(
+            "Por qué NOVA va lenta ahora mismo y qué está dejando para luego: "
+            "«por qué vas lenta», «estás usando mucha CPU»"
+        ),
+        handler=carga,
+        risk=Risk.SAFE,
+        responde_sola=True,
+    ))
     reg.register(Tool(
         name="pc.status",
         description="Estado del PC: CPU, RAM, procesos, batería",

@@ -21,6 +21,7 @@ import logging
 import os
 import threading
 
+from ..recursos import Vigilante
 from ..vista import clip
 from ..vista.album import Album
 from .registry import Risk, Tool, ToolResult
@@ -30,6 +31,10 @@ log = logging.getLogger("nova.tools.imagenes")
 _album: Album | None = None
 _hilo: threading.Thread | None = None
 _parar = threading.Event()
+# Repasar 16.000 imágenes son 13 minutos con la CPU a tope. Si te pones
+# a jugar a mitad, eso son fotogramas que le estamos quitando al juego
+# por una tarea que nadie ha pedido AHORA.
+_vigilante = Vigilante()
 
 # Cuántas se le enseñan. Más de tres nombres de archivo leídos en alto no
 # los retiene nadie, y la primera es la buena casi siempre.
@@ -90,9 +95,19 @@ def indexar() -> ToolResult:
     if not faltan:
         return ToolResult(ok=True, message="Ya las tengo todas miradas.")
 
+    if not _vigilante.hay_sitio_para_lo_pesado():
+        estado = _vigilante.estado()
+        cuando = f"cuando cierres {estado.juego}" if estado.hay_juego else "cuando se despeje"
+        return ToolResult(
+            ok=False,
+            message=f"Ahora no: {estado.en_una_frase().lower()} Dímelo {cuando}.",
+        )
+
     _parar.clear()
+    # Se para sola si el PC se pone al límite a mitad del repaso.
     _hilo = threading.Thread(
-        target=lambda: album.indexar(parar=_parar.is_set),
+        target=lambda: album.indexar(
+            parar=lambda: _parar.is_set() or not _vigilante.hay_sitio_para_lo_pesado()),
         daemon=True, name="album",
     )
     _hilo.start()

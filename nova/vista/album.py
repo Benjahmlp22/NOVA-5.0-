@@ -46,10 +46,11 @@ _SALTAR = frozenset({
 # barato que abrirla para mirar el tamaño real.
 MINIMO_BYTES = 12_000
 
-# Lote de 32, y los hilos los pone clip.py dejando cuatro núcleos libres:
-# esto corre en segundo plano mientras NOVA tiene que seguir hablando.
+# Lote de 32. Los hilos NO son fijos: los decide el vigilante de
+# recursos según cómo esté el PC en ese momento, porque esto corre en
+# segundo plano mientras NOVA tiene que seguir hablando.
 LOTE = 32
-HILOS = clip.HILOS
+HILOS = clip.HILOS          # el tope, cuando el PC va sobrado
 
 # Frases de contraste para saber CUÁNTA confianza merece un resultado.
 #
@@ -104,6 +105,21 @@ class Progreso:
     @property
     def porcentaje(self) -> int:
         return round(100 * self.hechas / self.total) if self.total else 0
+
+
+def _hilos_ahora() -> int:
+    """Cuántos hilos tocan ahora mismo, según lo cargado que esté el PC.
+
+    Se pregunta al empezar y no en cada lote: cambiar el tamaño de la
+    piscina a media faena no se puede, y de todas formas el `parar` de
+    abajo ya corta el indexado entero si la cosa se pone fea.
+    """
+    try:
+        from ..recursos import Vigilante
+
+        return min(HILOS, Vigilante().hilos_para_lo_pesado())
+    except Exception:  # noqa: BLE001
+        return HILOS
 
 
 def _raiz_album() -> Path:
@@ -234,7 +250,9 @@ class Album:
         # Decodificar imágenes es tan caro como pasarlas por el modelo
         # (20 ms contra 31), así que se hacen a la vez: mientras el
         # modelo trabaja con un lote, los hilos preparan el siguiente.
-        with ThreadPoolExecutor(max_workers=HILOS) as piscina:
+        hilos = _hilos_ahora()
+        log.info("indexando %d imágenes con %d hilo(s)", len(faltan), hilos)
+        with ThreadPoolExecutor(max_workers=hilos) as piscina:
             for i in range(0, len(faltan), LOTE):
                 if parar is not None and parar():
                     log.info("indexado cancelado a las %d imágenes", self.progreso.hechas)
