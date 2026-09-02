@@ -61,23 +61,43 @@ def test_con_el_pc_tranquilo_si_se_indexa(monkeypatch):
     assert v.hay_sitio_para_lo_pesado()
 
 
-def test_los_hilos_bajan_segun_se_carga_el_pc(monkeypatch):
+def _hilos_con(monkeypatch, v, estado):
+    monkeypatch.setattr(v, "estado", lambda forzar=False, e=estado: e)
+    return v.hilos_para_lo_pesado()
+
+
+def test_los_hilos_nunca_suben_al_cargarse_el_pc(monkeypatch):
+    """En la máquina que sea, incluida la de integración continua.
+
+    Antes esto exigía `holgado > justo > apretado` y **fallaba en
+    GitHub**: sus runners tienen 4 núcleos, así que `holgado` sale
+    max(2, 4-4) = 2 y `justo` sale max(2, 1) = 2 — iguales, no
+    decrecientes. El código estaba bien (ese suelo de 2 es a propósito:
+    con menos, indexar no avanza); el test asumía el PC de Benja, que
+    tiene 12 hilos.
+    """
     v = Vigilante()
+    holgado = _hilos_con(monkeypatch, v, _estado())
+    justo = _hilos_con(monkeypatch, v, _estado(cpu=75.0))
+    apretado = _hilos_con(monkeypatch, v, _estado(juego="StarCitizen"))
 
-    def con(estado):
-        monkeypatch.setattr(v, "estado", lambda forzar=False, e=estado: e)
-        return v.hilos_para_lo_pesado()
-
-    holgado = con(_estado())
-    justo = con(_estado(cpu=75.0))
-    apretado = con(_estado(juego="StarCitizen"))
-
-    assert holgado > justo > apretado
+    assert holgado >= justo >= apretado
     assert apretado == 1
+    assert justo >= 2, "con menos de dos hilos, lo pesado no avanza"
     # Nunca todos los núcleos: dejar cuatro libres salió MÁS rápido
     # medido (31 ms por imagen con 8 hilos contra 51 con 12).
     import os
     assert holgado <= max(2, (os.cpu_count() or 4) - 4)
+
+
+def test_y_en_un_pc_con_núcleos_de_sobra_sí_bajan(monkeypatch):
+    """La intención de verdad, comprobada sin depender del hardware."""
+    monkeypatch.setattr("nova.recursos.os.cpu_count", lambda: 16)
+    v = Vigilante()
+
+    assert _hilos_con(monkeypatch, v, _estado()) == 12          # 16 - 4
+    assert _hilos_con(monkeypatch, v, _estado(cpu=75.0)) == 6   # la mitad
+    assert _hilos_con(monkeypatch, v, _estado(juego="X")) == 1
 
 
 # ── Lo que se dice en alto ───────────────────────────────────────────

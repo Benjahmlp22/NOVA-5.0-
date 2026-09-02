@@ -94,7 +94,7 @@ def _scan_menu_inicio() -> dict[str, str]:
         if nombre and app_id:
             # `shell:AppsFolder\<AppID>` abre igual una app de la Store
             # que un programa de toda la vida.
-            encontradas.setdefault(nombre, f"shell:AppsFolder\{app_id}")
+            encontradas.setdefault(nombre, rf"shell:AppsFolder\{app_id}")
     return encontradas
 
 
