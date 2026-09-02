@@ -5,8 +5,15 @@
 
 > Sucesora de NOVA4 (julio 2026); NOVA, NOVA3.0-2027 y `nova/` quedan archivadas.
 
-Asistente de escritorio por voz. **Local, gratis y sin nube**: ni API
-keys, ni suscripciones, ni datos saliendo del PC.
+Asistente de escritorio por voz. **Local y gratis**: el cerebro es un
+modelo que corre en tu propia GPU, sin suscripciones y sin que tus datos
+salgan del PC.
+
+Con una excepción, y va explicada porque es la clase de cosa que no debe
+aparecer en la letra pequeña: existe un **cerebro opcional en la nube**
+para programar, que está **apagado** y sólo se enciende diciéndolo en voz
+alta. Sin clave configurada no existe siquiera. Ver
+[Cerebro rápido](#cerebro-rápido-opcional-y-apagado).
 
 Sólo Windows: usa SAPI y las voces OneCore, el OCR de WinRT y pywin32
 para las ventanas y el mezclador de audio.
@@ -58,6 +65,9 @@ En obras. Esto es lo que hay hecho y lo que no, sin adornos:
 | Cortarla hablando por encima | **hecho** |
 | Órdenes encadenadas | **hecho** — 8/8 en tres pasadas |
 | Presupuesto de RAM/VRAM medido | **hecho** |
+| Escribir y editar código de tus proyectos | **hecho** — verificado con un juego jugable |
+| Cerebro opcional en la nube para programar | **hecho** — apagado por defecto |
+| No repetir la misma búsqueda cada turno | **hecho** — apuntes + caché de 15 min |
 | Latencia punta a punta < 1,5 s | **NO**, pero de 3-5.6 s a 2-5.2 s |
 
 ## Qué necesitas
@@ -83,9 +93,11 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Tarda unos 8 segundos en estar escuchando: casi todo es cargar Whisper en
-la GPU. **Arráncala siempre con `run.py`** y no importando `nova.app` a
-mano — el orden de carga importa y está explicado en `nova/bootstrap.py`.
+Tarda unos 20 segundos en estar escuchando: casi todo es cargar Whisper
+`medium` en la GPU, y se paga una sola vez.
+
+**Arráncala siempre con `run.py`**, nunca importando `nova.app` a mano:
+el orden de carga importa y está explicado en `nova/bootstrap.py`.
 
 Con el detalle completo al fichero de log (`data/nova.log`), que es lo
 que hace falta cuando el audio se porta raro:
@@ -107,7 +119,8 @@ python smoke.py
 - Conversación continua: tras responder, sigue escuchando — no hace
   falta repetir "NOVA" en cada turno.
 - **"hasta luego"**, **"eso es todo"**, **"adiós"** → cierra la conversación.
-- Callarte 20 segundos → vuelve a dormir sola.
+- Callarte dos minutos → vuelve a dormir sola. (Antes eran 20 s y se
+  dormía a mitad de conversación en cuanto había una pausa.)
 - **Clic derecho en el orbe** → silenciar voz o salir.
 - Arrastra el orbe donde quieras.
 
@@ -132,6 +145,15 @@ tipo (y deshacerlo) · crear, leer y borrar en su carpeta de trabajo ·
 recordar cosas de ti entre sesiones · recordatorios, alarmas y
 temporizadores.
 
+**Programar.** Ver tus 182 proyectos y buscar dentro de ellos · leer un
+archivo (con rango de líneas, para los largos) · **escribir código
+nuevo**: "hazme un juego de la serpiente en HTML" crea el proyecto y lo
+deja jugable · **editar** un trozo sin reescribir el resto: "cámbiale el
+color a la serpiente" toca una línea, no las ciento veinte · ejecutar un
+script y contarte por qué ha fallado · correr los tests y decirte
+cuántos pasan. Con `escritorio=true` lo crea en el Escritorio, donde lo
+ves al momento.
+
 **Ver.** Leer el **texto que hay en pantalla** cuando no se puede copiar
 · buscar una imagen tuya **por lo que se ve en ella**, no por su nombre.
 
@@ -151,7 +173,11 @@ NOVA_MODEL_LIGERO=qwen2.5:3b  # al que se cambia si un juego llena la VRAM
 NOVA_KEEP_ALIVE=24h           # el modelo se queda en VRAM, no se recarga
 NOVA_CONFIRM=solo_peligroso
 NOVA_ESPERA_RESPUESTA=60      # aguanta despierta si ha preguntado algo
+NOVA_SEGUIMIENTO=35           # hablarle sin repetir su nombre
 NOVA_TTS=true
+
+# Cerebro en la nube. Sin clave en data/groq.key esto no hace nada.
+NOVA_REMOTO_SIEMPRE=false     # true = arrancar ya en modo rápido
 ```
 
 La voz elegida no va aquí: se cambia hablando y se guarda sola en
@@ -288,7 +314,7 @@ conocidas. «hola» sí; «hola, abre Discord» no.
 Preguntando «cuál es el archivo más grande de descargas», NOVA elegía
 bien, recibía «Lo que más ocupa: setup.exe, 1.8 gigas…» y contestaba «si
 quieres que te diga qué ocupa más, dímelo». Tenía la respuesta delante y
-no la daba. Las 19 herramientas que informan llevan `responde_sola` y su
+no la daba. Las 29 herramientas que informan llevan `responde_sola` y su
 mensaje sale tal cual — sin darle al modelo otra oportunidad de
 estropearlo, y con una vuelta al modelo menos.
 
@@ -447,6 +473,50 @@ de otra persona.
 Nada se ejecuta al arrancar. Importar un módulo YA ejecuta su cuerpo,
 así que el código sólo se importa si el plugin está activo, pidió el
 permiso, y lo activaste tú.
+
+## Cerebro rápido, opcional y apagado
+
+Un modelo de 4B no programa bien, y con un juego delante ni siquiera
+cabe en la tarjeta. Así que existe un cerebro de repuesto en la nube
+(`nova/llm/remoto.py`, capa gratuita de Groq). Todo lo que sigue es
+sobre **cuándo NO se usa**, que es lo que importa:
+
+- **Sin clave no existe.** No se contacta con nadie y NOVA funciona
+  exactamente igual que sin este módulo.
+- **Con clave sigue apagado.** Hay que decir «nova, modo rápido» en voz
+  alta, cada sesión. No se guarda en disco: un permiso que sobrevive a
+  los reinicios acaba siendo un permiso que nadie recuerda haber dado.
+- **«Modo local» gana siempre**, por encima de cualquier configuración.
+- Si falla —cuota, red, modelo retirado— vuelve sola al modelo de casa y
+  lo dice.
+
+La clave va en `data/groq.key`, fuera del repositorio, y nunca se
+escribe en el log.
+
+### Los números, que son la mitad de la decisión
+
+Medidos el 02/09 contra la API de verdad:
+
+| | |
+|---|---|
+| `openai/gpt-oss-120b` | **0,62 s** por respuesta, con el catálogo entero |
+| `qwen3.5:4b` local, en caliente | 1-2 s |
+| `qwen3.5:4b` local, con un juego abierto | 4-7 s |
+
+El de 120.000 millones de parámetros va **más rápido** que el tuyo de
+4.000, porque no corre en tu tarjeta. Ése es todo el truco.
+
+Lo que lo limita no es el día, son los **tokens por minuto**: 8.000 en
+la capa gratuita. Un turno de NOVA gastaba 3.849 —3.683 sólo de entrada,
+casi todo el catálogo de herramientas—, o sea **dos turnos por minuto** y
+el tercero esperando 23 segundos. Por eso al cerebro remoto se le mandan
+sólo las 18 herramientas que vienen a cuento (`elegir_herramientas`) y
+se recortan los resultados largos (`acotar_resultados`): el turno bajó a
+~1.800 tokens y **de 2 a 5 turnos seguidos**.
+
+Aun así son cinco frases por minuto. Para "qué hora es" el modelo local
+va sobrado y no tiene límite ninguno — de ahí que la nube se pida a mano
+justo cuando hace falta, y no viva encendida.
 
 ## Cuando el PC no da para todo
 
@@ -778,7 +848,10 @@ nova/
     onecore.py      las voces buenas de Windows (WinRT vía PowerShell)
     onecore.ps1     el proceso que se queda vivo sintetizando
     chime.py        sonido de activación
-  tools/            lo que NOVA sabe hacer + permisos
+  tools/            las 68 herramientas + permisos
+    registry.py     el modelo propone, el registro dispone
+    codigo.py       ver, escribir, editar, ejecutar y probar tus proyectos
+    cerebro.py      «modo rápido» / «modo local» hablando
   ui/               orbe, borde de pantalla
 tests/              639 tests, sin red ni micrófono
 ```

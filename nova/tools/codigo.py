@@ -7,10 +7,17 @@ ni ver un error.
 
 Tres decisiones que no son de estilo:
 
-**Sólo dentro de `Desktop\\proyectos`.**  Ejecutar un comando arbitrario
-en cualquier sitio del disco a partir de lo que ha entendido un modelo de
-4B por un micrófono es exactamente el tipo de cosa que no debe poder
-pasar.  La raíz se fija en la configuración y no se sale de ahí.
+**Sólo dentro de dos carpetas, y ninguna se elige hablando.**  La de
+proyectos (`Desktop\\proyectos`) y el Escritorio, y las dos se fijan en
+la configuración.  Ejecutar un comando arbitrario en cualquier sitio del
+disco a partir de lo que ha entendido un modelo de 4B por un micrófono
+es exactamente el tipo de cosa que no debe poder pasar.
+
+El Escritorio entró el 02/09 y sólo porque hacía falta: pedido "hazme un
+juego en el escritorio", NOVA escribía dentro de `nova/workspace/` —una
+carpeta interna suya— y Benja no encontraba nada.  Se comprueba con la
+ruta ya resuelta (`_dentro_conocido`), así que `..` no lleva a ninguna
+parte.
 
 **Antes de ejecutar nada, se le pregunta al vigilante de recursos.**  Un
 `pytest` de 500 tests o un `npm run build` se comen la máquina, y si

@@ -95,22 +95,23 @@ ha retirado: `NOVA_REMOTO_MODEL` con el nombre nuevo y listo.
 
 ### Probarla en vivo, de punta a punta
 
-**Nada de lo hecho el 27 de agosto se ha visto correr con micrófono real
-y jugando a la vez.** Está verificado con 496 tests y con scripts
-sueltos que llaman a las piezas por separado, pero la aplicación entera,
-con voz de verdad, no se ha arrancado en toda esa sesión.
-
-Concretamente, sin verificación real:
+Buena parte de esto ya se hizo el 01 y el 02 de septiembre, hablándole
+de verdad y con un juego abierto. Lo verificado en vivo:
 
 - el modo ligero cambiando de modelo con un juego abierto,
-- los botones de mudo y sordo,
-- `organizar.hacerlo` contra los 627 archivos reales de Descargas (sólo
-  se ha probado en seco y con carpetas de mentira),
-- el arreglo del audio cortado,
-- la búsqueda de imágenes con una consulta que importe.
+- escribir un juego en HTML y jugarlo,
+- editar ese juego sin reescribirlo,
+- correr los tests de un proyecto de verdad,
+- el vigilante negándose a compilar con un juego a pantalla completa,
+- «modo rápido» / «modo local», y la caída sola a local al agotar cuota.
 
-Es lo más barato de hacer y lo que más incertidumbre quita. Antes de
-construir nada encima, arráncala.
+**Lo que sigue sin verse correr de verdad:**
+
+- `organizar.hacerlo` contra los 627 archivos reales de Descargas (sólo
+  se ha probado en seco y con carpetas de mentira). Es lo que más
+  incertidumbre queda: mueve archivos de Benja.
+- la búsqueda de imágenes con una consulta que importe,
+- los botones de mudo y sordo.
 
 ### Calibrar el umbral de confianza de las imágenes
 
