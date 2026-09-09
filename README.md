@@ -1,5 +1,7 @@
 # NOVA 5 — agosto 2026
 
+Creado por **[Benjahmlp22](https://github.com/Benjahmlp22)**.
+
 [![tests](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml/badge.svg)](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml)
 [![licencia: CC BY-NC-SA 4.0](https://img.shields.io/badge/licencia-CC%20BY--NC--SA%204.0-blue.svg)](LICENSE)
 
@@ -875,13 +877,19 @@ python bench/bench_stt.py --sufijo benja   # WER y latencia de los dos motores
 separa "micro apagado", "dispositivo equivocado", "nivel muy bajo" y
 "reconocedor malo", que dan exactamente el mismo síntoma.
 
-## Licencia
+## Autor y licencia
 
-[CC BY-NC-SA 4.0](LICENSE). En corto: **NOVA5 es gratis y lo seguirá siendo.**
+NOVA5 la ha diseñado y escrito **[Benjahmlp22](https://github.com/Benjahmlp22)**,
+que es su autor y mantiene el copyright del código.
+
+Se publica bajo [CC BY-NC-SA 4.0](LICENSE). En corto: **NOVA5 es gratis y lo
+seguirá siendo.**
 
 Puedes usarla, leerla, aprender de ella, modificarla y compartirla. Lo único
 que no puedes hacer es venderla — ni tal cual, ni retocada, ni con otro
-nombre, ni metida dentro de algo de pago. Si publicas tu versión, cita de
-dónde salió y mantén esta misma licencia.
+nombre, ni metida dentro de algo de pago.
+
+Si publicas tu versión: di que salió de aquí, enlaza a este repositorio, y
+mantén esta misma licencia. La autoría no se hereda al hacer un fork.
 
 Para cualquier uso comercial, abre un issue y lo hablamos.

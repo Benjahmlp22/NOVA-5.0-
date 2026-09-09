@@ -1,0 +1,24 @@
+NOVA 5
+Asistente de escritorio local por voz.
+
+Autor y creador
+---------------
+Benjahmlp22 — https://github.com/Benjahmlp22
+
+Diseño, arquitectura y desarrollo. El copyright del código de NOVA5 es suyo;
+ver LICENSE (CC BY-NC-SA 4.0) para lo que se puede y no se puede hacer con él.
+
+Un fork no transfiere la autoría: si publicas una versión modificada, este
+archivo se mantiene y añades tu nombre debajo, no encima.
+
+
+Contribuciones
+--------------
+(De momento ninguna externa. Ver CONTRIBUTING.md si quieres aportar.)
+
+
+Terceros
+--------
+NOVA5 se apoya en trabajo de otros, cada uno con su propia licencia:
+Ollama, Vosk (Alpha Cephei), faster-whisper, PyQt5, psutil, httpx, y las
+voces OneCore de Windows. El copyright de esas piezas es de sus autores.
