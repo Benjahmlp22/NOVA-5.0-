@@ -1,7 +1,7 @@
 # NOVA 5 — agosto 2026
 
 [![tests](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml/badge.svg)](https://github.com/Benjahmlp22/NOVA-5.0-/actions/workflows/tests.yml)
-[![licencia: MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
+[![licencia: CC BY-NC-SA 4.0](https://img.shields.io/badge/licencia-CC%20BY--NC--SA%204.0-blue.svg)](LICENSE)
 
 > Sucesora de NOVA4 (julio 2026); NOVA, NOVA3.0-2027 y `nova/` quedan archivadas.
 
@@ -874,3 +874,14 @@ python bench/bench_stt.py --sufijo benja   # WER y latencia de los dos motores
 `nova.doctor` es lo primero que hay que ejecutar cuando NOVA no entienda:
 separa "micro apagado", "dispositivo equivocado", "nivel muy bajo" y
 "reconocedor malo", que dan exactamente el mismo síntoma.
+
+## Licencia
+
+[CC BY-NC-SA 4.0](LICENSE). En corto: **NOVA5 es gratis y lo seguirá siendo.**
+
+Puedes usarla, leerla, aprender de ella, modificarla y compartirla. Lo único
+que no puedes hacer es venderla — ni tal cual, ni retocada, ni con otro
+nombre, ni metida dentro de algo de pago. Si publicas tu versión, cita de
+dónde salió y mantén esta misma licencia.
+
+Para cualquier uso comercial, abre un issue y lo hablamos.
