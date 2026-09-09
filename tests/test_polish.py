@@ -100,8 +100,8 @@ def test_coletillas_que_nova4_dejaba_pasar(entrada, esperado):
     # Smoke del 26/08 sobre qwen3.5:4b, con el filtro anterior ya puesto.
     ("Ahora son las 01:52. ¿Necesitas que haga algo más por ti?",
      "Ahora son las 01:52."),
-    ("Estás viendo a Claude. ¿Quieres que haga algo más?",
-     "Estás viendo a Claude."),
+    ("Estás viendo Firefox. ¿Quieres que haga algo más?",
+     "Estás viendo Firefox."),
     ("Hecho. ¿Puedo hacer alguna otra cosa?", "Hecho."),
 ])
 def test_pregunta_por_algo_mas_es_relleno_lo_envuelva_el_verbo_que_sea(entrada, esperado):
