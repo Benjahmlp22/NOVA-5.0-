@@ -14,12 +14,9 @@ fallo cae dentro de `WhisperModel.__init__`, sin excepción de Python y
 sin traceback (aparece con `python -X faulthandler`), así que desde el
 síntoma no hay forma de llegar a la causa.
 
-Como `nova/app.py` importa PyQt5 en su cabecera, el orden sólo se puede
-garantizar desde fuera: `run.py` llama aquí primero y sólo después
-importa la aplicación.
-
-El precio es que el orbe tarda unos segundos en salir. Se paga a gusto:
-NOVA4 tardaba 42 s en ser capaz de oír, y encima sin decirlo.
+Ahora `run.py` construye un proxy ligero. El proceso spawn carga Whisper
+cuando llega el primer audio, sin importar Qt. `preparar_transcriptor`
+conserva la ruta anticipada para los bancos de pruebas existentes.
 """
 
 from __future__ import annotations
@@ -56,6 +53,8 @@ def parsear_argumentos(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Escribe el detalle completo (audio, parciales, tiempos) al fichero de log.",
     )
+    parser.add_argument("--inicio-windows", action="store_true",
+                        help="Inicia en fondo profundo al entrar en Windows.")
     return parser.parse_args(argv)
 
 
@@ -156,3 +155,22 @@ def preparar_transcriptor(anunciar: bool = True) -> Transcriptor:
         if anunciar:
             print(f"  ✗ {transcriptor.error}", flush=True)
     return transcriptor
+
+
+def preparar_transcriptor_diferido():
+    """Construye una puerta ligera; la carga nativa ocurrirá en otro proceso."""
+    from .hardware import GIB, perfilar
+    from .voice.diferido import TranscriptorDiferido
+    perfil = perfilar()
+    nvidia = perfil.gpus and any(g.marca == "NVIDIA" for g in perfil.gpus)
+    pequeno = perfil.ram_total is None or perfil.ram_total <= 8 * GIB
+    cpu = not nvidia or pequeno or CONFIG.whisper_device == "cpu"
+    return TranscriptorDiferido(
+        modelo=CONFIG.whisper_cpu if cpu else CONFIG.whisper_model,
+        compute_type="int8" if cpu else CONFIG.whisper_compute,
+        device="cpu" if cpu else CONFIG.whisper_device,
+        cpu_threads=max(1, min(4, perfil.hilos // 2)),
+        # Vosk pequeño puede transcribir con vocabulario abierto; el grande
+        # de reserva (2.3 GB en disco) no debe ser el plan B de un PC de 8 GiB.
+        vosk_model=CONFIG.wake_model if pequeno else CONFIG.vosk_model,
+    )

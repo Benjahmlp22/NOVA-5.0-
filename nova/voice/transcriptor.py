@@ -91,7 +91,9 @@ class Transcriptor:
         device: str = "auto",
         prompt: str = PROMPT_NOVA,
         vosk_model=None,
+        cpu_threads: int = 2,
     ) -> None:
+        self.cpu_threads = cpu_threads
         self.nombre_modelo = modelo
         self.compute_type = compute_type
         self.device_pedido = device
@@ -142,7 +144,8 @@ class Transcriptor:
 
             t0 = time.monotonic()
             self._whisper = WhisperModel(
-                self.nombre_modelo, device=device, compute_type=compute
+                self.nombre_modelo, device=device, compute_type=compute,
+                cpu_threads=self.cpu_threads, num_workers=1
             )
             self.device = device
             log.info(
@@ -153,6 +156,11 @@ class Transcriptor:
         except Exception as exc:  # noqa: BLE001
             log.info("no pude cargar faster-whisper: %s", exc)
             self._whisper = None
+            if self.device_pedido != "cpu":
+                # CUDA puede enumerarse pero fallar al reservar memoria. CPU/int8
+                # se intenta antes de degradar el reconocimiento a Vosk.
+                self.device_pedido = "cpu"
+                return self._cargar_whisper()
             return False
 
     def _cargar_vosk(self) -> bool:

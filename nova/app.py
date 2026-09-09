@@ -1,6 +1,7 @@
 """NOVA — orquestación.
 
-Une voz, cerebro y overlays. Un solo proceso, varios hilos:
+Une voz, cerebro y overlays. Qt y orquestación comparten proceso;
+la transcripción usa un hijo spawn para aislar Whisper del runtime de Qt.
 
     Hilo Qt (principal)   pinta orbe y glow. Nunca bloquea.
     Hilo de trabajo       LLM + herramientas (tardan segundos).
@@ -32,7 +33,6 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-import time
 
 from PyQt5.QtCore import (
     QObject,
@@ -46,15 +46,19 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtWidgets import QApplication
 
-from .bootstrap import configurar_logging, parsear_argumentos
+from .bootstrap import configurar_logging, parsear_argumentos, preparar_transcriptor_diferido
 from .config import CONFIG
 from .core.agent import Agent
 from .core.awareness import Awareness
 from .core.conversation import Conversation, build_system_prompt
 from .core.polish import recortar_para_voz
+from .energia import Energia, NivelEnergia
+from .hardware import GIB, perfilar
+from .llm.adaptacion import Adaptacion
 from .llm.ollama import OllamaClient
 from .llm.remoto import ClienteRemoto, leer_clave
 from .plugins import Gestor, cargar_activos
+from .recursos import Vigilante, establecer_residencia
 from .tools import (
     PendingConfirmation,
     apps,
@@ -151,6 +155,9 @@ def estado_en_reposo(*, ocupada: bool, escuchando: bool, sorda: bool = False) ->
 class _Worker(QObject):
     """Ejecuta el turno pesado fuera del hilo de la interfaz."""
 
+    recursos = pyqtSignal(object, bool)
+    aviso_sistema = pyqtSignal(str)
+    reposo_listo = pyqtSignal(int, bool, bool)
     listo = pyqtSignal(str, list, bool)    # texto, herramientas, ya dicho
     cayo_el_remoto = pyqtSignal(str)       # el cerebro de la nube ha fallado
     frase = pyqtSignal(str)                # una frase suelta, según se genera
@@ -164,6 +171,12 @@ class _Worker(QObject):
         self.conv = conv
         self.awareness = awareness
         self.plugins = plugins
+        self.adaptacion = None
+        self.energia = None
+        self.transcriptor = None
+        self.listener = None
+        self.inicializar = None
+        self._servicios_listos = False
 
     def procesar(self, mensaje: str) -> None:
         """Un turno completo. Nunca deja escapar una excepción.
@@ -182,7 +195,58 @@ class _Worker(QObject):
             log.exception("el turno se rompió: %r", mensaje)
             self.listo.emit("Me he atascado con eso.", [], False)
 
+    def activar(self):
+        try:
+            if not self._servicios_listos:
+                self.inicializar()
+                self._servicios_listos = True
+            if self.adaptacion:
+                self.adaptacion.preparar()
+                # El servicio no recibe ninguna petición de carga antes del wake
+                # confirmado. Esta petición también queda serializada con los turnos.
+                self.adaptacion.cliente.precalentar()
+        except Exception as exc:
+            log.exception("No pude preparar todos los servicios")
+            self.aviso_sistema.emit(str(exc))
+
+    def revisar_recursos(self):
+        try:
+            if self.energia.nivel == NivelEnergia.ACTIVA:
+                estado, ligero = self.adaptacion.revisar()
+                self.recursos.emit(estado, ligero)
+            else:
+                self.recursos.emit(None, self.adaptacion.ligero)
+        except Exception as exc:
+            self.aviso_sistema.emit(str(exc))
+            self.recursos.emit(None, self.adaptacion.ligero)
+
+    def mantenimiento(self, version, soltar_stt):
+        if not self.energia.vigente(version):
+            return
+        terminado = True
+        try:
+            # Nunca a mitad de chat: mantenimiento y procesar son slots del MISMO
+            # trabajador. Un wake nuevo invalida la orden antes de cada operación.
+            if self.energia.vigente(version):
+                self.adaptacion.cliente.descargar()
+        except Exception as exc:
+            self.aviso_sistema.emit(f"No pude liberar el modelo de Ollama: {exc}")
+        try:
+            if self.energia.vigente(version):
+                terminado = imagenes.reposar()
+            if soltar_stt and self.energia.vigente(version):
+                if self.listener.procesando_audio:
+                    terminado = False
+                else:
+                    terminado &= self.transcriptor.descargar(version=self.transcriptor.version)
+        except Exception as exc:
+            self.aviso_sistema.emit(f"No pude completar el reposo: {exc}")
+        self.reposo_listo.emit(version, soltar_stt, terminado)
+
     def _procesar(self, mensaje: str) -> None:
+        if self.adaptacion:
+            estado, ligero = self.adaptacion.revisar()
+            self.recursos.emit(estado, ligero)
         # `memory.para_prompt()` lee un JSON de unos pocos KB; a
         # diferencia del clima, esto sí puede estar en el camino crítico.
         # Los plugins activos añaden su personalidad al final del
@@ -233,6 +297,10 @@ class _Worker(QObject):
 class Nova(QObject):
     """La aplicación. Se crea, se arranca y vive en la bandeja del sistema."""
 
+    _salida_lista = pyqtSignal()
+    _activar_servicios = pyqtSignal()
+    _consultar_recursos = pyqtSignal()
+    _mantenimiento = pyqtSignal(int, bool)
     _procesar = pyqtSignal(str)
     _confirmar = pyqtSignal(object)
     # Las herramientas corren en el HILO TRABAJADOR, no en el de Qt. Dos
@@ -265,6 +333,13 @@ class Nova(QObject):
         super().__init__()
         self.app = app
         CONFIG.ensure_dirs()
+        self.energia = Energia()
+        self.perfil = perfilar()
+        self._cerrando = False
+        self._salida_lista.connect(self.app.quit)
+        self._reposo_pedido = False
+        self._consulta_en_curso = False
+        self._version_reposo = 0
 
         # ── Cerebro ──────────────────────────────────────────────────
         self.llm = OllamaClient(
@@ -290,11 +365,9 @@ class Nova(QObject):
 
         self.tools = build_registry(CONFIG.confirm_policy)
 
-        # Plugins. Encontrarlos es leer JSON; el código de los activos se
-        # importa aquí y sólo aquí (ver nova/plugins/carga.py).
+        # El gestor vacío no ejecuta plugins: su carga espera al primer wake
+        # confirmado para que una extensión no rompa el fondo profundo.
         self.plugins = Gestor()
-        for aviso in cargar_activos(self.plugins, self.tools):
-            log.warning("plugin: %s", aviso)
         self._panel_plugins = None
         self.conv = Conversation(CONFIG.history_turns)
         self.awareness = Awareness()
@@ -326,15 +399,9 @@ class Nova(QObject):
             # `_nivel_voz_nova`.
             on_nivel=self._nivel_voz_nova,
         )
-        # Etapa 2: entiende la orden Y confirma que el nombre estaba de
-        # verdad. Llega ya cargado desde `run()`, antes de que existiera
-        # Qt — construirlo después mata el proceso (ver voice/cuda.py).
-        self.transcriptor = transcriptor or Transcriptor(
-            modelo=CONFIG.whisper_model,
-            compute_type=CONFIG.whisper_compute,
-            device=CONFIG.whisper_device,
-            vosk_model=CONFIG.vosk_model,
-        )
+        # El trabajador spawn no importa Qt: evita el fallo nativo documentado
+        # sin pagar la carga de Whisper durante el arranque.
+        self.transcriptor = transcriptor or preparar_transcriptor_diferido()
         self.listener = VoiceListener(
             CONFIG.wake_model,
             CONFIG.wake_word,
@@ -373,7 +440,20 @@ class Nova(QObject):
         # ── Hilo de trabajo ──────────────────────────────────────────
         self._hilo = QThread()
         self._worker = _Worker(self.agent, self.conv, self.awareness, self.plugins)
+        self.vigilante = Vigilante(self.perfil, self.llm.residencia_detallada)
+        establecer_residencia(self.llm.residencia_detallada)
+        self._worker.adaptacion = Adaptacion(self.llm, self.vigilante, CONFIG)
+        self._worker.energia = self.energia
+        self._worker.transcriptor = self.transcriptor
+        self._worker.listener = self.listener
+        self._worker.inicializar = self._iniciar_servicios
         self._worker.moveToThread(self._hilo)
+        self._activar_servicios.connect(self._worker.activar)
+        self._consultar_recursos.connect(self._worker.revisar_recursos)
+        self._mantenimiento.connect(self._worker.mantenimiento)
+        self._worker.recursos.connect(self._al_recursos)
+        self._worker.aviso_sistema.connect(self.ui.set_respondido)
+        self._worker.reposo_listo.connect(self._al_reposo_listo)
         self._procesar.connect(self._worker.procesar)
         self._confirmar.connect(self._worker.confirmar)
         self._worker.listo.connect(self._al_responder)
@@ -394,59 +474,90 @@ class Nova(QObject):
 
     # ── Arranque / apagado ───────────────────────────────────────────
 
+    def _iniciar_servicios(self):
+        """En el trabajador, una vez y sólo tras una llamada confirmada."""
+        self.speaker.start()
+        voz.aplicar_guardado(self.speaker)
+        self.awareness.start()
+        apps.precalentar_indice()
+        for aviso in cargar_activos(self.plugins, self.tools):
+            log.warning("plugin: %s", aviso)
+        self._aplicar_voz_de_plugins()
+
     def start(self) -> None:
         self._hilo.start()
-        self.awareness.start()
-        # El índice de apps se construye ya, no en el primer
-        # "abre Discord" del día.
-        apps.precalentar_indice()
-
-        # Vigilante de recordatorios. Un temporizador de Qt y no un hilo:
-        # esto toca la interfaz, y todo lo que toca la interfaz vive en
-        # el hilo de Qt (ver la cabecera de este módulo).
+        voz.conectar(self.speaker)
+        tool_plugins.conectar(self.plugins, self._abrir_plugins.emit)
+        cerebro.conectar(self)
+        self._aplicar_cerebro(apretado=False)
         self._reloj = QTimer(self)
         self._reloj.timeout.connect(self._revisar_recordatorios)
         self._reloj.timeout.connect(self._revisar_recursos)
-        self._reloj.start(int(SEGUNDOS_ENTRE_REVISIONES * 1000))
-
-        # El hueco de seguimiento se cierra solo, sin que pase ningún
-        # evento: nadie avisa de que han pasado ocho segundos. Sin este
-        # latido, el panel se quedaba en "te escucho" y el borde azul
-        # encendido hasta que volvieras a hablarle.
         self._latido = QTimer(self)
         self._latido.timeout.connect(self._sincronizar_estado)
-        self._latido.start(500)
-        self.speaker.start()
-        # Las herramientas de voz necesitan el altavoz de verdad: quien
-        # cambia de voz es él, no el registro.
-        voz.conectar(self.speaker)
-        voz.aplicar_guardado(self.speaker)
-        # `.emit` y no el método: lo llama el hilo trabajador.
-        tool_plugins.conectar(self.plugins, self._abrir_plugins.emit)
-        cerebro.conectar(self)
-        # Si está puesto el modo rápido de serie, que valga desde la
-        # primera frase y no desde el primer latido del vigilante.
-        self._aplicar_cerebro(apretado=False)
-        self._aplicar_voz_de_plugins()
-
+        self._soltar_stt = QTimer(self)
+        self._soltar_stt.setSingleShot(True)
+        self._soltar_stt.timeout.connect(self._caducar_stt)
         self.ui.mostrar()
-
-        if not self.llm.available():
-            log.warning("Ollama no responde en %s", CONFIG.ollama_url)
-            self._decir(
-                "No encuentro Ollama. Ábrelo y vuelvo a estar operativa.",
-                estado="apagada",
-            )
-        else:
-            self._precalentar_modelo()
-
-        # "preparando" hasta que el modelo de voz esté cargado de verdad.
-        # start() ya no bloquea, así que aquí NOVA todavía no oye nada:
-        # decir "dormida" en este punto sería mentirle al usuario durante
-        # los segundos que tarde la carga (42 s medidos con el es-0.42).
+        self.ui.set_energia(self.energia.nivel)
         self.ui.set_estado("preparando")
+        # Registrar no contacta con Ollama, no arranca PowerShell TTS ni carga
+        # Whisper. El error de permisos se conserva como aviso visible.
+        from .arranque_windows import ArranqueWindows, ErrorArranque
+        from .config import ROOT
+        try:
+            ArranqueWindows(ROOT).reparar_ruta_registrada()
+        except ErrorArranque as exc:
+            self.ui.set_respondido(str(exc))
         if not self.listener.start():
             self._al_voz_error(self.listener.error)
+
+    def _activar_energia(self):
+        anterior = self.energia.nivel
+        self.energia.activar()
+        self._reposo_pedido = False
+        self._soltar_stt.stop()
+        self.ui.set_energia(self.energia.nivel)
+        self._reloj.start(int(SEGUNDOS_ENTRE_REVISIONES * 1000))
+        self._latido.start(500)
+        if anterior != NivelEnergia.ACTIVA:
+            self._activar_servicios.emit()
+
+    def _intentar_reposo(self):
+        if (not self._reposo_pedido or self._ocupada or self.speaker.speaking
+                or self.listener.procesando_audio):
+            return
+        self._reposo_pedido = False
+        self._version_reposo = self.energia.dormir()
+        self.ui.set_energia(self.energia.nivel)
+        # Los recordatorios conservan su cadencia; la revisión de recursos
+        # no consulta Ollama/GPU durante el reposo.
+        self._latido.stop()
+        # Leer RAM no lanza procesos ni importa runtimes de inferencia.
+        import psutil
+        try:
+            bajo = psutil.virtual_memory().available < 2 * GIB  # ESTIMADO; ver recursos.py.
+        except OSError:
+            bajo = True
+        self._mantenimiento.emit(self._version_reposo, bajo)
+        if not bajo:
+            self._soltar_stt.start(round(CONFIG.reposo_stt_s * 1000))
+
+    def _caducar_stt(self):
+        if self.energia.vigente(self._version_reposo):
+            self._mantenimiento.emit(self._version_reposo, True)
+
+    def _al_reposo_listo(self, version, soltar_stt, terminado):
+        if not terminado and self.energia.vigente(version):
+            # El indexador termina el lote y guarda su avance antes de soltar ONNX.
+            QTimer.singleShot(5000, lambda: self._mantenimiento.emit(version, soltar_stt))
+
+    def _al_recursos(self, estado, ligero):
+        self._consulta_en_curso = False
+        self._modo_ligero = ligero
+        self.ui.set_modo_ligero(ligero)
+        if estado is not None:
+            self._aplicar_cerebro(apretado=estado.modo() == "apretado")
 
     def _al_voz_lista(self) -> None:
         self.ui.set_estado("dormida")
@@ -493,6 +604,7 @@ class Nova(QObject):
         if self._ocupada or self.speaker.speaking or not self.listener.ready:
             return
         self._reposo()
+        self._intentar_reposo()
 
     # ── Recursos ─────────────────────────────────────────────────────
 
@@ -564,40 +676,11 @@ class Nova(QObject):
         self._aplicar_cerebro(apretado=self._modo_ligero)
 
     def _revisar_recursos(self) -> None:
-        """¿Sigue el modelo dentro de la GPU, o lo ha echado un juego?
-
-        Cuando un juego se queda con la VRAM, el driver expulsa al modelo
-        y Ollama sigue respondiendo... desde la CPU, cuatro veces más
-        lento, sin que nada lo diga. Medido con Star Citizen abierto:
-        qwen3.5:4b tardaba 4.36-7.44 s con sólo el 10% en la GPU, y
-        qwen2.5:3b hacía lo mismo en 1.11-1.19 s porque SÍ cabía.
-
-        Así que se cambia al pequeño mientras dure la escasez, y se
-        vuelve al bueno cuando haya sitio otra vez.
-        """
-        if self._ocupada:
+        if (self._ocupada or self._consulta_en_curso
+                or self.energia.nivel != NivelEnergia.ACTIVA):
             return
-        try:
-            residencia = self.llm.residencia()
-        except Exception:  # noqa: BLE001
-            return
-
-        apretado = residencia < CONFIG.residencia_minima
-        # Falta de VRAM es justo el caso en que la nube gana: allí no
-        # ocupa nada. Se mira SIEMPRE, aunque el modo ligero no cambie.
-        self._aplicar_cerebro(apretado=apretado)
-        if self._en_remoto or apretado == self._modo_ligero:
-            return
-        if apretado and self._hay_modelo_ligero():
-            log.info("sólo el %.0f%% del modelo en la GPU: paso al ligero",
-                     residencia * 100)
-            self.llm.usar_modelo(CONFIG.model_ligero)
-            self._modo_ligero = True
-        elif not apretado and self._modo_ligero:
-            log.info("hay VRAM otra vez: vuelvo a %s", CONFIG.model)
-            self.llm.usar_modelo(CONFIG.model)
-            self._modo_ligero = False
-        self.ui.set_modo_ligero(self._modo_ligero)
+        self._consulta_en_curso = True
+        self._consultar_recursos.emit()
 
     def _hay_modelo_ligero(self) -> bool:
         """¿Existe de verdad el modelo de repuesto? Se pregunta una vez.
@@ -676,29 +759,6 @@ class Nova(QObject):
         log.error("Voz no disponible: %s", mensaje)
         self._decir(f"Voz no disponible: {mensaje}", estado="apagada", hablar=False)
 
-    def _precalentar_modelo(self) -> None:
-        """Paga la carga en frío del modelo al arrancar, no al primer "NOVA".
-
-        En un PC ajustado de recursos, leer ~2 GB de disco a VRAM la
-        primera vez puede tardar bastantes segundos (mucho más si el
-        antivirus escanea el archivo del modelo al vuelo). Haciéndolo
-        aquí, en un hilo aparte durante el arranque, esa espera ocurre
-        en segundo plano mientras aparece el orbe — no cuando el usuario
-        ya está esperando una respuesta.
-        """
-
-        def _tarea() -> None:
-            t0 = time.monotonic()
-            try:
-                self.llm.chat([{"role": "user", "content": "hola"}])
-                log.info("Modelo precalentado en %.1fs", time.monotonic() - t0)
-            except Exception:
-                log.debug("no pude precalentar el modelo", exc_info=True)
-
-        threading.Thread(target=_tarea, daemon=True, name="precalentar").start()
-
-    # ── Plugins ──────────────────────────────────────────────────────
-
     def abrir_panel_plugins(self) -> None:
         """Abre el panel. SÓLO desde el hilo de Qt, por señal.
 
@@ -756,17 +816,37 @@ class Nova(QObject):
             self.speaker.usar_voz(pedida)
 
     def salir(self) -> None:
+        if self._cerrando:
+            return
+        self._cerrando = True
         log.info("cerrando NOVA")
+        self._reloj.stop()
+        self._latido.stop()
+        self._soltar_stt.stop()
         self.ui.cerrar()
         self.listener.stop()
         self.speaker.stop()
         pantalla.cerrar()
         imagenes.cerrar()
         self.awareness.stop()
+        self._hilo.finished.connect(self._terminar_salida)
         self._hilo.quit()
-        self._hilo.wait(1500)
-        self.llm.close()
-        self.app.quit()
+
+    def _terminar_salida(self):
+        def limpiar():
+            try:
+                if hasattr(self.transcriptor, "cerrar"):
+                    self.transcriptor.cerrar()
+                try:
+                    if self._worker.adaptacion.preparada:
+                        self.llm.descargar()
+                except Exception:
+                    log.debug("No pude descargar al cerrar", exc_info=True)
+                self.llm.close()
+            finally:
+                self._salida_lista.emit()
+        # Qt sigue vivo mientras terminan operaciones nativas y HTTP pendientes.
+        threading.Thread(target=limpiar, name="cierre", daemon=True).start()
 
     def alternar_voz(self) -> None:
         """El botón de callarla. Sigue oyéndote y sigue haciendo cosas."""
@@ -807,6 +887,9 @@ class Nova(QObject):
         puerta la etapa 1, NOVA haría ruido cada vez que dijeras "no va a
         funcionar" — la misma secuencia de fonemas que su nombre.
         """
+        if self._cerrando:
+            return
+        self._activar_energia()
         if self._ocupada:
             # Ya estaba trabajando: el usuario la interrumpe.
             self.speaker.shut_up()
@@ -831,6 +914,8 @@ class Nova(QObject):
         self._decir(random.choice(SALUDOS), estado="escucha")
 
     def _al_comando(self, texto: str) -> None:
+        if getattr(self, "_cerrando", False):
+            return
         # Primera línea que se escribe ya en el hilo de Qt. Marca la
         # frontera: si el log acaba en «oído» y no llega aquí, lo que
         # falló fue el salto entre hilos y no el turno.
@@ -883,6 +968,7 @@ class Nova(QObject):
         self._procesar.emit(texto)
 
     def _al_dormir(self, motivo: str) -> None:
+        self._reposo_pedido = True
         self.glow.apagar()
         self.ui.set_dicho("")
         self.ui.set_respondido("")
@@ -1052,25 +1138,14 @@ def _mensaje_de_qt(tipo, contexto, texto) -> None:  # noqa: ANN001, ARG001
 def run(args=None, transcriptor: Transcriptor | None = None) -> int:  # noqa: ANN001
     """Punto de entrada: monta la app Qt y entra en el bucle de eventos.
 
-    El transcriptor llega YA CARGADO desde `run.py`, que lo prepara antes
-    de importar este módulo. No es una optimización: construirlo después
-    de que PyQt5 esté en el proceso mata a NOVA con un segmentation
-    fault. El porqué medido está en `nova/bootstrap.py`.
+    El transcriptor es un proxy ligero. Su proceso hijo carga Whisper,
+    sin Qt, al llegar el primer candidato con audio ya capturado.
     """
     if args is None:
         args = parsear_argumentos(None)
         configurar_logging(debug=args.debug)
     if transcriptor is None:
-        # Camino de conveniencia (tests, `python -m nova.app`): aquí
-        # PyQt5 ya está importado, así que Whisper no va a poder cargar y
-        # el transcriptor caerá a Vosk. Para uso normal, `run.py`.
-        log.warning("arrancando sin transcriptor precargado; usa run.py")
-        transcriptor = Transcriptor(
-            modelo=CONFIG.whisper_model,
-            compute_type=CONFIG.whisper_compute,
-            device=CONFIG.whisper_device,
-            vosk_model=CONFIG.vosk_model,
-        )
+        transcriptor = preparar_transcriptor_diferido()
 
     # Antes de que exista la QApplication: los primeros avisos de Qt
     # salen durante su construcción.

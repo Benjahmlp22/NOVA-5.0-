@@ -230,6 +230,7 @@ def _panel():
     pulsados: list[str] = []
     pnl = Panel(on_toggle_mute=lambda: pulsados.append("mudo"),
                 on_toggle_sordo=lambda: pulsados.append("sordo"))
+    pnl.abrir_ajustes.connect(lambda: pulsados.append("ajustes"))
     pnl.minimizar.connect(lambda: pulsados.append("minimizar"))
     pnl.set_estado("escucha")
     return pnl, pulsados

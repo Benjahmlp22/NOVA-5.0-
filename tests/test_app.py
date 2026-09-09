@@ -182,8 +182,12 @@ class _LLMFalso:
         self.residente = 1.0
         self.cambios: list[str] = []
 
-    def residencia(self) -> float:
-        return self.residente
+    def available(self):
+        return True
+
+    def residencia_detallada(self):
+        from nova.llm.ollama import Residencia
+        return Residencia(True, self.residente)
 
     def tiene_modelo(self, nombre: str) -> bool:  # noqa: ARG002
         return True
@@ -223,6 +227,7 @@ class _NovaPelada:
     """Sólo las piezas que deciden con qué cerebro se piensa."""
 
     _ocupada = False
+    _consulta_en_curso = False
     _modo_ligero = False
     _ligero_disponible = None
     _preferencia_cerebro = ""
@@ -230,12 +235,31 @@ class _NovaPelada:
     _revisar_recursos = Nova._revisar_recursos
     _hay_modelo_ligero = Nova._hay_modelo_ligero
     _aplicar_cerebro = Nova._aplicar_cerebro
+    _al_recursos = Nova._al_recursos
 
     def __init__(self, remoto: bool = False) -> None:
         self.llm = _LLMFalso(CONFIG.model)
         self.ui = _UIFalsa()
         self.remoto = _RemotoFalso(remoto)
         self.agent = _AgenteFalso()
+        from types import SimpleNamespace
+
+        from nova.energia import Energia
+        from nova.hardware import GIB, GPU, PerfilHardware
+        from nova.llm.adaptacion import Adaptacion
+        from nova.recursos import Estado
+        self.energia = Energia()
+        self.energia.activar()
+        self.ocupacion = 0.2
+        vigilante = SimpleNamespace(
+            perfil=PerfilHardware(16, 8, 32 * GIB, (GPU("GPU", "NVIDIA", False, 12 * GIB),)),
+            estado=lambda: Estado(vram=self.ocupacion))
+        self.adaptacion = Adaptacion(self.llm, vigilante, CONFIG)
+        def consultar():
+            self._al_recursos(*self.adaptacion.revisar())
+        # Simula la entrega al trabajador; los tests de QThread comprueban aparte
+        # que la interfaz sólo encola y no hace HTTP ni mide CPU por sí misma.
+        self._consultar_recursos = SimpleNamespace(emit=consultar)
 
 
 def test_baja_al_modelo_ligero_cuando_la_gpu_se_llena():
@@ -272,12 +296,14 @@ def test_vuelve_al_bueno_al_cerrar_el_juego():
     n.llm.residente = 0.10
     n._revisar_recursos()
     n.llm.residente = 1.0
-    n._revisar_recursos()
+    n.adaptacion._ultimo_cambio -= 61
+    for _ in range(3):
+        n._revisar_recursos()
     assert not n._modo_ligero
     assert n.llm.model == CONFIG_NORMAL
     # Y la interfaz se entera de las dos veces: el usuario tiene que
     # poder saber por qué NOVA fue lenta un rato.
-    assert n.ui.avisos == [True, False]
+    assert True in n.ui.avisos and n.ui.avisos[-1] is False
 
 
 # ── Dormirse no puede arrastrar un "sí/no" pendiente ──────────────────

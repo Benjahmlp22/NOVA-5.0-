@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,10 +33,24 @@ class LLMResponse:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     eval_count: int = 0
+    carga_s: float | None = None
+    primer_fragmento_s: float | None = None
 
 
 class OllamaError(RuntimeError):
     """Ollama no responde o devolvió algo inesperado."""
+
+
+def _nombre(nombre: str) -> str:
+    # Ollama devuelve :latest aunque el usuario haya omitido la etiqueta.
+    return nombre if ":" in nombre.rsplit("/", 1)[-1] else nombre + ":latest"
+
+
+@dataclass(frozen=True)
+class Residencia:
+    cargado: bool | None
+    fraccion: float | None
+    detalle: str = ""
 
 
 class OllamaClient:
@@ -55,6 +71,7 @@ class OllamaClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.num_ctx = num_ctx
+        self.opciones_hardware: dict[str, Any] = {}
         # Un cliente reutilizado mantiene viva la conexión TCP; abrir
         # una nueva por mensaje añade handshake a cada respuesta.
         self._http = httpx.Client(timeout=timeout)
@@ -71,36 +88,59 @@ class OllamaClient:
         except Exception:
             return False
 
-    def residencia(self) -> float:
-        """Qué fracción del modelo está de verdad en la GPU, de 0 a 1.
-
-        Ollama dice en `/api/ps` cuánto ocupa el modelo (`size`) y cuánto
-        de eso está en VRAM (`size_vram`). Cuando un juego se queda con
-        la tarjeta, el driver expulsa al modelo y esa fracción se hunde:
-        medido con Star Citizen abierto, 330 MB de 3.2 GB — el 10%. El
-        resto corre en CPU y las respuestas pasan de 1-4 s a 10-48 s.
-
-        Es la única señal fiable de "voy lenta por falta de VRAM".
-        Mirar la VRAM libre con nvidia-smi no vale: dice cuánta hay, no
-        si el modelo está dentro.
-
-        Devuelve 1.0 si no se puede saber: ante la duda, no alarmar.
-        """
+    def residencia_detallada(self) -> Residencia:
         try:
-            datos = self._http.get(f"{self.url}/api/ps", timeout=3.0).json()
-        except Exception:  # noqa: BLE001
-            return 1.0
-        for m in datos.get("models") or []:
-            if m.get("model") != self.model and m.get("name") != self.model:
-                continue
-            total = float(m.get("size") or 0)
-            en_vram = float(m.get("size_vram") or 0)
-            if total <= 0:
-                return 1.0
-            return max(0.0, min(1.0, en_vram / total))
-        # No está cargado todavía: no es que vaya lento, es que no ha
-        # empezado.
-        return 1.0
+            respuesta = self._http.get(f"{self.url}/api/ps", timeout=3.0)
+            respuesta.raise_for_status()
+            datos = respuesta.json()
+            modelos = datos["models"]
+            if not isinstance(modelos, list):
+                raise ValueError("lista de modelos inválida")
+            for m in modelos:
+                if not any(_nombre(n) == _nombre(self.model)
+                           for n in (m.get("model"), m.get("name")) if n):
+                    continue
+                total, vram = m.get("size"), m.get("size_vram")
+                if (not isinstance(total, (int, float)) or total <= 0
+                        or not isinstance(vram, (int, float))
+                        or not math.isfinite(total) or not math.isfinite(vram)
+                        or not 0 <= vram <= total):
+                    return Residencia(True, None, "Ollama no publica una residencia válida")
+                return Residencia(True, vram / total, "Ollama /api/ps")
+            return Residencia(False, None, "Modelo descargado")
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError):
+            return Residencia(None, None, "No pude consultar Ollama")
+
+    def residencia(self) -> float | None:
+        return self.residencia_detallada().fraccion
+
+    def descargar(self, nombre: str | None = None) -> None:
+        # Se descarga sólo el modelo que usa NOVA, nunca todo el servicio.
+        respuesta = self._http.post(
+            f"{self.url}/api/generate",
+            json={"model": nombre or self.model, "keep_alive": 0, "stream": False},
+            timeout=10.0,
+        )
+        respuesta.raise_for_status()
+
+    def precalentar(self) -> None:
+        inicio = time.perf_counter()
+        respuesta = self._http.post(f"{self.url}/api/generate", json={
+            "model": self.model, "keep_alive": self.keep_alive, "stream": False,
+            "options": {"num_ctx": self.num_ctx, **self.opciones_hardware}})
+        respuesta.raise_for_status()
+        self._medicion(respuesta.json(), inicio, None, "carga")
+
+    def _medicion(self, dato, inicio, primer_fragmento, operacion):
+        # Ollama publica nanosegundos. El reloj local incluye HTTP y colas;
+        # no confundir carga del modelo con tiempo hasta empezar a oír la voz.
+        ns = dato.get("load_duration")
+        carga = ns / 1e9 if isinstance(ns, (int, float)) and math.isfinite(ns) and ns >= 0 else None
+        log.info("medicion_llm %s", json.dumps({
+            "operacion": operacion, "modelo": self.model,
+            "carga_s": carga, "primer_fragmento_s": primer_fragmento,
+            "total_cliente_s": time.perf_counter() - inicio}, ensure_ascii=False))
+        return carga
 
     def tiene_modelo(self, nombre: str) -> bool:
         """¿Está ese modelo descargado?
@@ -114,7 +154,7 @@ class OllamaClient:
         except Exception:  # noqa: BLE001
             return False
         return any(
-            (m.get("model") or m.get("name") or "") == nombre
+            _nombre(m.get("model") or m.get("name") or "") == _nombre(nombre)
             for m in datos.get("models") or []
         )
 
@@ -169,11 +209,13 @@ class OllamaClient:
                 "temperature": self.temperature,
                 "num_predict": self.max_tokens,
                 "num_ctx": self.num_ctx,
+                **self.opciones_hardware,
             },
         }
         if tools:
             payload["tools"] = tools
 
+        inicio = time.perf_counter()
         try:
             resp = self._http.post(f"{self.url}/api/chat", json=payload)
             # Modelos sin soporte de "think" rechazan el campo: reintento
@@ -196,6 +238,7 @@ class OllamaClient:
             text=msg.get("content") or "",
             tool_calls=self._parse_tool_calls(msg),
             eval_count=int(data.get("eval_count") or 0),
+            carga_s=self._medicion(data, inicio, None, "chat"),
         )
 
     def _chat_en_trozos(
@@ -203,6 +246,7 @@ class OllamaClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         on_trozo: Callable[[str], None],
+        _sin_think: bool = False,
     ) -> LLMResponse:
         """Igual que `chat`, pero entregando el texto según se genera.
 
@@ -220,21 +264,27 @@ class OllamaClient:
                 "temperature": self.temperature,
                 "num_predict": self.max_tokens,
                 "num_ctx": self.num_ctx,
+                **self.opciones_hardware,
             },
         }
         if tools:
             payload["tools"] = tools
 
+        if _sin_think:
+            payload.pop("think", None)
         partes: list[str] = []
         llamadas: list[ToolCall] = []
         evaluados = 0
+        inicio = time.perf_counter()
+        primer_fragmento = None
+        final = {}
         try:
             with self._http.stream("POST", f"{self.url}/api/chat", json=payload) as resp:
-                if resp.status_code == 400:
+                if resp.status_code == 400 and not _sin_think:
                     # Modelos sin soporte de "think" rechazan el campo.
                     resp.read()
-                    payload.pop("think", None)
-                    return self._chat_en_trozos(messages, tools, on_trozo)
+                    if "think" in resp.text.lower():
+                        return self._chat_en_trozos(messages, tools, on_trozo, True)
                 resp.raise_for_status()
                 for linea in resp.iter_lines():
                     if not linea:
@@ -247,9 +297,12 @@ class OllamaClient:
                     llamadas.extend(self._parse_tool_calls(msg))
                     trozo = msg.get("content") or ""
                     if trozo:
+                        if primer_fragmento is None:
+                            primer_fragmento = time.perf_counter() - inicio
                         partes.append(trozo)
                         on_trozo(trozo)
                     if dato.get("done"):
+                        final = dato
                         evaluados = int(dato.get("eval_count") or 0)
         except httpx.ConnectError as exc:
             raise OllamaError(f"No encuentro Ollama en {self.url}. ¿Está abierto?") from exc
@@ -257,7 +310,9 @@ class OllamaClient:
             log.exception("fallo llamando a Ollama en streaming")
             raise OllamaError(f"Error del modelo: {exc}") from exc
 
-        return LLMResponse(text="".join(partes), tool_calls=llamadas, eval_count=evaluados)
+        return LLMResponse(text="".join(partes), tool_calls=llamadas, eval_count=evaluados,
+                           carga_s=self._medicion(final, inicio, primer_fragmento, "stream"),
+                           primer_fragmento_s=primer_fragmento)
 
     # ── Conversión ───────────────────────────────────────────────────
 

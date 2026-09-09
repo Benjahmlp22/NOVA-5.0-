@@ -32,8 +32,8 @@ from __future__ import annotations
 from collections import deque
 
 from PyQt5.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import QMenu, QWidget
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtWidgets import QMenu, QToolButton, QWidget
 
 ANCHO = 340
 RADIO = 14
@@ -62,7 +62,7 @@ ACCIONES_VISIBLES = 4
 # saber dónde están: lo pintado y lo clicable salen de aquí, que es
 # donde estas cosas siempre acaban descuadradas.
 BOTON = 20                 # lado del área sensible al clic
-BOTONES = ("minimizar", "sordo", "mudo")
+BOTONES = ("minimizar", "sordo", "mudo", "ajustes")
 _PASO_BOTON = 26           # separación entre centros
 
 # El punto de aviso va a la IZQUIERDA de todos los botones, y se calcula
@@ -121,6 +121,7 @@ def color_de_accion(tipo: str) -> QColor:
 
 
 class Panel(QWidget):
+    abrir_ajustes = pyqtSignal()
     """Ventana sin marco, siempre encima, que no roba el foco."""
 
     minimizar = pyqtSignal()
@@ -166,6 +167,30 @@ class Panel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)  # ~30 fps
+
+        # QWidget hijo: el clic y el teclado quedan en la tuerca. El orbe no
+        # cambia y el arrastre del resto de la cabecera conserva su área.
+        self.tuerca = QToolButton(self)
+        self.tuerca.setGeometry(self.rect_boton("ajustes").adjusted(-2, -2, 2, 2))
+        self.tuerca.setToolTip("Ajustes")
+        self.tuerca.setAccessibleName("Abrir ajustes de NOVA")
+        self.tuerca.setFocusPolicy(Qt.StrongFocus)
+        self.tuerca.setStyleSheet("QToolButton{border:0;background:transparent} QToolButton:hover,QToolButton:focus{background:#343438;border-radius:4px}")
+        mapa = QPixmap(24, 24)
+        mapa.fill(Qt.transparent)
+        pintor = QPainter(mapa)
+        pintor.setRenderHint(QPainter.Antialiasing)
+        pintor.translate(12, 12)
+        pintor.setPen(QPen(_TENUE, 1.6))
+        pintor.setBrush(Qt.NoBrush)
+        pintor.drawEllipse(-6, -6, 12, 12)
+        pintor.drawEllipse(-2, -2, 4, 4)
+        for _ in range(8):
+            pintor.drawLine(6, 0, 9, 0)
+            pintor.rotate(45)
+        pintor.end()
+        self.tuerca.setIcon(QIcon(mapa))
+        self.tuerca.clicked.connect(self.abrir_ajustes.emit)
 
         self._borrado = QTimer(self)
         self._borrado.setSingleShot(True)
@@ -244,6 +269,8 @@ class Panel(QWidget):
     # ── Pintado ──────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        if not self.isVisible():
+            return
         # La onda avanza SIEMPRE, aunque el nivel sea cero: así se ve que
         # el panel está vivo y que el silencio es silencio de verdad, no
         # una imagen congelada.
@@ -335,6 +362,8 @@ class Panel(QWidget):
 
     def _pintar_botones(self, p: QPainter) -> None:
         for nombre in BOTONES:
+            if nombre == "ajustes":
+                continue  # La tuerca es un control Qt con foco y accesibilidad.
             caja = self.rect_boton(nombre)
             cx = caja.center().x() + 1
             cy = caja.center().y() + 1
@@ -523,7 +552,9 @@ class Panel(QWidget):
         e.accept()
 
     def _pulsar(self, nombre: str) -> None:
-        if nombre == "minimizar":
+        if nombre == "ajustes":
+            self.abrir_ajustes.emit()
+        elif nombre == "minimizar":
             self.minimizar.emit()
         elif nombre == "mudo" and self._on_toggle_mute:
             self._on_toggle_mute()

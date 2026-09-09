@@ -12,8 +12,8 @@
                                                ▼
                                     on_wake (chime) + on_command
 
-Todo en el mismo proceso, a una llamada de función del micrófono, como
-manda la primera decisión sagrada del proyecto.
+La captura permanece en el proceso principal. La etapa 2 diferida usa
+un trabajador spawn sin Qt para evitar el fallo nativo documentado.
 
 Cuatro cosas que NOVA4 hacía mal y aquí no:
 
@@ -190,6 +190,7 @@ class VoiceListener:
         # ni se duerme ni exige que la vuelvas a nombrar.
         self._esperando_respuesta_hasta = 0.0
         self.error = ""
+        self._procesando_audio = threading.Event()
 
         # Búfer circular: el último segundo, siempre. Se dimensiona en
         # bloques porque es la unidad en la que llega el audio.
@@ -420,7 +421,7 @@ class VoiceListener:
         if not self.detector.cargar():
             self._fallar(self.detector.error or "no pude cargar el detector de wake word")
             return
-        if self.transcriptor is not None:
+        if self.transcriptor is not None and not getattr(self.transcriptor, "diferido", False):
             # Normalmente llega ya cargado y caliente desde `run.py` — se
             # construye antes que PyQt5 por obligación (ver bootstrap).
             # Esto sólo actúa si alguien montó el listener por su cuenta.
@@ -447,8 +448,10 @@ class VoiceListener:
     def _escuchar(self, camino: Camino) -> None:
         import sounddevice as sd
 
+        from ..config import CONFIG
         from .audio import remuestrear
-
+        from .puerta_energia import PuertaEnergia
+        puerta = PuertaEnergia(self.detector, BLOQUE_MS) if CONFIG.vad_wake else None
         cola: queue.Queue = queue.Queue(maxsize=128)
 
         def callback(indata, frames, tiempo, estado):  # noqa: ANN001, ARG001
@@ -522,21 +525,34 @@ class VoiceListener:
                     self.sleep_now("silencio")
 
                 nivel = rms(bloque)
-                self._on_nivel(nivel)
+                if self._awake:
+                    self._on_nivel(nivel)
                 if self._awake and self._en_seguimiento():
                     # Acabas de hablar con ella: puedes seguir sin repetir
                     # el nombre. Lo que decide si eso ERA para NOVA es la
                     # etapa 2, no el nivel de sonido.
                     if nivel >= self._umbral:
                         self._capturar(cola, camino, exige_nombre=False)
-                elif self.detector.escucha(a_int16(bloque)):
+                elif (puerta.escucha(a_int16(bloque), nivel, self._umbral) if puerta
+                      else self.detector.escucha(a_int16(bloque))):
                     log.debug("etapa 1: algo suena a «%s»", self.wake_word)
                     self.detector.reiniciar()
                     self._capturar(cola, camino, exige_nombre=True)
 
     # ── Captura de un enunciado ──────────────────────────────────────
 
+    @property
+    def procesando_audio(self):
+        return self._procesando_audio.is_set()
+
     def _capturar(self, cola: queue.Queue, camino: Camino, *, exige_nombre: bool) -> None:
+        self._procesando_audio.set()
+        try:
+            self._capturar_enunciado(cola, camino, exige_nombre=exige_nombre)
+        finally:
+            self._procesando_audio.clear()
+
+    def _capturar_enunciado(self, cola: queue.Queue, camino: Camino, *, exige_nombre: bool) -> None:
         """Acumula hasta que el hablante se calla, y manda a la etapa 2."""
         from .audio import remuestrear
 
@@ -576,7 +592,19 @@ class VoiceListener:
         if not hay_senal(senal):
             self._on_nada()
             return
-        self._entender(senal, exige_nombre=exige_nombre)
+        try:
+            self._entender(senal, exige_nombre=exige_nombre)
+        finally:
+            # La orden ya está en `senal`. Tras una carga fría de varios segundos,
+            # reproducir la cola atrasada convertiría conversación ajena en órdenes.
+            # Se vuelve a escuchar desde AHORA; se invita a esperar la respuesta.
+            for _ in range(cola.qsize()):
+                try:
+                    cola.get_nowait()
+                except queue.Empty:
+                    break
+            self._preroll.clear()
+            self.detector.reiniciar()
 
     # ── Etapa 2 ──────────────────────────────────────────────────────
 
@@ -585,7 +613,14 @@ class VoiceListener:
             self._on_nada()
             return
         t0 = time.monotonic()
-        oido = self.transcriptor.transcribir_detallado(senal)
+        try:
+            oido = self.transcriptor.transcribir_detallado(senal)
+        except Exception as exc:
+            # Un fallo del trabajador no debe apagar el wake word: se puede
+            # reparar Ollama/modelos y reintentar sin reiniciar la interfaz.
+            self._on_error(str(exc))
+            self._on_nada()
+            return
         texto = normalizar_texto(oido.texto)
         log.info("oído en %.2fs (%.1fs de audio): %r",
                  time.monotonic() - t0, senal.size / SAMPLE_RATE, texto)
@@ -596,6 +631,8 @@ class VoiceListener:
         # es exactamente lo que hacía.
         if not oido.creible:
             log.info("descarto lo oído: %s", oido.motivo_descarte())
+            if getattr(self.transcriptor, "diferido", False):
+                self.transcriptor.confirmar_candidato(False)
             self._on_nada()
             return
 
@@ -605,9 +642,13 @@ class VoiceListener:
                 # La etapa 1 se equivocó: era "no va", no "nova". NOVA
                 # vuelve a dormir sin haber hecho ruido — el chime no ha
                 # sonado, así que el usuario ni se entera.
+                if getattr(self.transcriptor, "diferido", False):
+                    self.transcriptor.confirmar_candidato(False)
                 log.debug("etapa 2 descarta la llamada: %r", texto)
                 self._on_nada()
                 return
+            if getattr(self.transcriptor, "diferido", False):
+                self.transcriptor.confirmar_candidato(True)
             self._awake = True
             self._ultimo_turno = time.monotonic()
             self._esperando_orden = not resto

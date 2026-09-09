@@ -17,7 +17,8 @@ from .registry import Risk, Tool, ToolResult
 
 log = logging.getLogger("nova.tools.ventanas")
 
-_user32 = ctypes.windll.user32
+# La disponibilidad de Windows se decide al usar la herramienta, no al importar.
+_user32 = ctypes.windll.user32 if hasattr(ctypes, "windll") else None
 
 # Constantes de la API de Windows, con nombre porque los números sueltos
 # en medio del código no dicen nada.

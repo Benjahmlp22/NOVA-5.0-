@@ -22,13 +22,14 @@ from __future__ import annotations
 import functools
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
 import numpy as np
 
 from ..config import ROOT
+from ..hardware import perfilar
+from ..recursos import presupuesto_hilos
 
 log = logging.getLogger("nova.vista.clip")
 
@@ -52,7 +53,7 @@ CONTEXTO = 77          # tokens que acepta el codificador de texto
 # hablar mientras indexa. Con la CPU al tope, sintetizar una frase pasa
 # de 11 ms a 1909 ms en el peor caso, y ahí es donde empezaban los
 # plazos agotados que le partían el audio.
-HILOS = max(2, (os.cpu_count() or 4) - 4)
+HILOS = presupuesto_hilos(perfilar().hilos)  # Presupuesto ESTIMADO; ver recursos.py.
 
 
 def hay_modelos() -> bool:
@@ -187,6 +188,11 @@ class CodificadorCLIP:
         self._vision = None
         self._texto = None
 
+    def descargar(self):
+        # Se invoca cuando el indexador ya terminó y desde el trabajador de
+        # herramientas: nadie puede seguir usando estas sesiones simultáneamente.
+        self._vision = self._texto = None
+
     @staticmethod
     def _sesion(archivo: str):
 
@@ -199,7 +205,12 @@ class CodificadorCLIP:
         # Los hilos, a mano. El "auto" de onnxruntime se queda a menos de
         # la mitad de lo que da la máquina: 72 ms por imagen en auto
         # contra 31 poniéndolos a mano. Ver HILOS arriba.
-        opciones.intra_op_num_threads = HILOS
+        from ..recursos import Vigilante
+        opciones.intra_op_num_threads = Vigilante().hilos_para_lo_pesado()
+        opciones.inter_op_num_threads = 1
+        # Una sesión ociosa no debe ocupar hilos haciendo spin-wait.
+        opciones.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        opciones.add_session_config_entry("session.inter_op.allow_spinning", "0")
         return ort.InferenceSession(str(MODELOS / archivo), opciones,
                                     providers=["CPUExecutionProvider"])
 

@@ -224,3 +224,15 @@ def register(reg) -> None:  # noqa: ANN001
         risk=Risk.SAFE,
         responde_sola=True,
     ))
+
+
+def reposar() -> bool:
+    """La cola de herramientas llama aquí entre turnos, nunca dentro de buscar."""
+    _parar.set()
+    if _indexando():
+        _hilo.join(timeout=2.0)
+    if _indexando():
+        return False  # Se reintentará: no liberar sesiones mientras un lote las usa.
+    if _album is not None:
+        _album._codificador.descargar()
+    return True

@@ -18,7 +18,8 @@ import logging
 
 from PyQt5.QtCore import QObject
 
-from ..config import CONFIG
+from ..arranque_windows import ArranqueWindows
+from ..config import CONFIG, ROOT
 from .actividad import describir
 from .glow import GlowBorder
 from .orb import Orb
@@ -41,9 +42,36 @@ class Interfaz(QObject):
 
         self._colapsada = False
         self._estado = "preparando"
+        self._energia = "Fondo profundo"
+        self._ajustes = None
+        self.panel.abrir_ajustes.connect(self.abrir_ajustes)
 
         self.panel.minimizar.connect(self.colapsar)
         self.orb.expandir.connect(self.expandir)
+
+    def abrir_ajustes(self):
+        from .ajustes import Ajustes
+        if self._ajustes is None:
+            self._ajustes = Ajustes(ArranqueWindows(ROOT))
+        self._ajustes.recargar()
+        self._ajustes.energia.setText("Energía: " + self._energia)
+        self._ajustes.show()
+        self._ajustes.raise_()
+        self._ajustes.activateWindow()
+
+    def set_energia(self, nivel):
+        self._energia = nivel.value
+        activa = self._energia == "Activa"
+        # En reposo no mantenemos 60 despertares/s entre dos widgets. El
+        # texto y los avisos siguen repintándose cuando cambia su contenido.
+        for widget in (self.orb, self.panel):
+            if activa:
+                widget._timer.start(33)
+            else:
+                widget._timer.stop()
+                widget.update()
+        if self._ajustes is not None:
+            self._ajustes.energia.setText("Energía: " + self._energia)
 
     # ── Ciclo de vida ────────────────────────────────────────────────
 
@@ -63,6 +91,8 @@ class Interfaz(QObject):
         self.panel.hide()
         self.orb.hide()
         self.glow.apagar()
+        if self._ajustes is not None:
+            self._ajustes.close()
 
     # ── Colapsar / expandir ──────────────────────────────────────────
 

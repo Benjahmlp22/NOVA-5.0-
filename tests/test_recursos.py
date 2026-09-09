@@ -67,15 +67,7 @@ def _hilos_con(monkeypatch, v, estado):
 
 
 def test_los_hilos_nunca_suben_al_cargarse_el_pc(monkeypatch):
-    """En la máquina que sea, incluida la de integración continua.
-
-    Antes esto exigía `holgado > justo > apretado` y **fallaba en
-    GitHub**: sus runners tienen 4 núcleos, así que `holgado` sale
-    max(2, 4-4) = 2 y `justo` sale max(2, 1) = 2 — iguales, no
-    decrecientes. El código estaba bien (ese suelo de 2 es a propósito:
-    con menos, indexar no avanza); el test asumía el PC de Benja, que
-    tiene 12 hilos.
-    """
+    """El presupuesto nunca crece con la carga, incluso con 1–4 hilos."""
     v = Vigilante()
     holgado = _hilos_con(monkeypatch, v, _estado())
     justo = _hilos_con(monkeypatch, v, _estado(cpu=75.0))
@@ -83,20 +75,34 @@ def test_los_hilos_nunca_suben_al_cargarse_el_pc(monkeypatch):
 
     assert holgado >= justo >= apretado
     assert apretado == 1
-    assert justo >= 2, "con menos de dos hilos, lo pesado no avanza"
-    # Nunca todos los núcleos: dejar cuatro libres salió MÁS rápido
-    # medido (31 ms por imagen con 8 hilos contra 51 con 12).
-    import os
-    assert holgado <= max(2, (os.cpu_count() or 4) - 4)
+    assert justo >= 1
+    from nova.recursos import presupuesto_hilos
+    assert holgado == presupuesto_hilos(v.perfil.hilos)
 
 
 def test_y_en_un_pc_con_núcleos_de_sobra_sí_bajan(monkeypatch):
     """La intención de verdad, comprobada sin depender del hardware."""
-    monkeypatch.setattr("nova.recursos.os.cpu_count", lambda: 16)
-    v = Vigilante()
+    from nova.hardware import GIB, PerfilHardware
+    v = Vigilante(PerfilHardware(16, 8, 32 * GIB, ()))
 
-    assert _hilos_con(monkeypatch, v, _estado()) == 12          # 16 - 4
-    assert _hilos_con(monkeypatch, v, _estado(cpu=75.0)) == 6   # la mitad
+    # 16 hilos → tres cuartos son 12, recortados al tope medido de 8.
+    assert _hilos_con(monkeypatch, v, _estado()) == 8
+    assert _hilos_con(monkeypatch, v, _estado(cpu=75.0)) == 4   # la mitad
+    assert _hilos_con(monkeypatch, v, _estado(juego="X")) == 1
+
+
+def test_un_portatil_pequeño_no_se_queda_sin_hilos(monkeypatch):
+    """Lo que motivó hacerlo proporcional.
+
+    Con la regla vieja (`núcleos - 4`) un portátil de 4 hilos se quedaba
+    con 2 —la mitad del PC— y uno de 2 hilos, con nada. Ahora reparte
+    por proporción: 3 de 4, dejando uno libre para la voz y Windows.
+    """
+    from nova.hardware import GIB, PerfilHardware
+    v = Vigilante(PerfilHardware(4, 2, 8 * GIB, ()))
+
+    assert _hilos_con(monkeypatch, v, _estado()) == 3
+    assert _hilos_con(monkeypatch, v, _estado(cpu=75.0)) == 1
     assert _hilos_con(monkeypatch, v, _estado(juego="X")) == 1
 
 

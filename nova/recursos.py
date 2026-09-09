@@ -1,58 +1,222 @@
-"""Cuánto sitio hay, y cuánto puede ocupar NOVA sin estorbar.
+"""Presupuesto por hardware y carga. Las extrapolaciones son ESTIMACIONES.
 
-Un asistente que vive en tu escritorio compite por la misma máquina que
-lo que estás haciendo. Si te pones a jugar y NOVA sigue indexando
-imágenes con ocho hilos, le has cambiado los fotogramas por una función
-que no le habías pedido en ese momento.
-
-Antes esto se miraba en un solo sitio y sólo para una cosa: la VRAM, y
-sólo para cambiar de modelo. Ahora hay un único vigilante que mide la
-máquina entera y dice en qué **modo** está, y todo lo caro le pregunta
-antes de ponerse:
-
-    holgado    haz lo que quieras
-    justo      lo caro, más despacio y con menos hilos
-    apretado   lo caro se espera; sólo lo que el usuario acaba de pedir
-
-Los números de abajo salen de medir en la máquina de referencia (Ryzen
-5 5600G, 12 hilos, RTX 3060 de 12 GB), no de una regla general.
+Medición histórica, sólo Ryzen 5600G/12 hilos: saturar CPU llevó TTS de
+11 a 1909 ms; CLIP tardó 31 ms con 8 hilos y 51 ms con 12. Eso motiva
+reservar capacidad, NO demuestra un porcentaje universal para otros PCs.
 """
-
 from __future__ import annotations
 
 import ctypes
 import logging
-import os
+import math
 import subprocess
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from .hardware import GIB, PerfilHardware, ocupacion_dxcore, perfilar
 
 log = logging.getLogger("nova.recursos")
-
-# ── Los umbrales, y de dónde salen ───────────────────────────────────
-#
-# CPU al 70%: medido, con los 12 hilos al tope sintetizar una frase pasa
-# de 11 ms a 1909 ms. A partir de ahí NOVA ya se nota lenta al hablar,
-# que es lo que primero molesta.
-CPU_JUSTO = 70.0
-CPU_APRETADO = 88.0
-
-# VRAM al 85%: es el punto en que Ollama empieza a dejar parte del modelo
-# fuera de la tarjeta. Con Star Citizen abierto se midió el 92% y el
-# modelo corriendo al 10% en GPU.
-VRAM_JUSTO = 0.85
-VRAM_APRETADO = 0.95
-
-# RAM al 90%: por encima Windows empieza a tirar de disco y todo se
-# arrastra, NOVA la primera.
-RAM_JUSTO = 85.0
-RAM_APRETADO = 93.0
-
-# Cada cuánto se vuelve a mirar de verdad. Preguntar por la VRAM llama a
-# nvidia-smi, que tarda ~40 ms: hacerlo en cada frase sería absurdo.
+# Conservado: nvidia-smi tardó ~40 ms en el equipo de referencia.
+# 3 s es la política anterior, no una frecuencia óptima medida en otros PCs.
 CADUCIDAD_S = 3.0
 
-# Procesos que tienen una ventana a pantalla completa y NO son un juego.
+
+@dataclass(frozen=True)
+class Umbrales:
+    # Valores de compatibilidad para Estado sintético sin inventario.
+    # Producción SIEMPRE los sustituye por calibrar(perfil).
+    cpu_justo: float = 70.0
+    cpu_apretado: float = 88.0
+    ram_justo: float = 85.0
+    ram_apretado: float = 93.0
+    # El 85% motivó el ajuste en la 3060; extrapolarlo es estimado.
+    vram_justo: float = 0.85
+    vram_apretado: float = 0.95
+    libre_justo: int = 0
+    libre_apretado: int = 0
+
+
+def calibrar(perfil: PerfilHardware) -> Umbrales:
+    h = max(1, perfil.hilos)
+    # ESTIMADO: 55/73% con 4 hilos, 65/81% con 8, 70/88% desde 12.
+    # Núcleos/SMT no miden IPC ni latencia TTS; validar con bench/medir_energia.py.
+    cpu_j = min(70.0, 45.0 + 2.5 * h)
+    cpu_a = min(88.0, 65.0 + 2.0 * h)
+    total = perfil.ram_total
+    if not total:
+        return Umbrales(cpu_j, cpu_a)
+    # ESTIMADO: proteger 2–4 GiB para Windows y la voz; 1–2 GiB es urgencia.
+    # Los límites por porcentaje impiden reservas imposibles en PCs < 4 GiB.
+    j = int(min(total * 0.40, max(2 * GIB, min(4 * GIB, total / 8))))
+    a = int(min(total * 0.20, max(GIB, min(2 * GIB, total / 16))))
+    return Umbrales(cpu_j, cpu_a, 100 * (1 - j / total),
+                    100 * (1 - a / total), libre_justo=j, libre_apretado=a)
+
+
+def presupuesto_hilos(hilos: int) -> int:
+    """Hilos para una tarea de fondo, según el tamaño de la máquina.
+
+    La regla es proporcional, no un `-4` fijo: restar cuatro dejaba a un
+    portátil de 4 hilos con dos (la mitad del PC) y a uno de 2 con nada.
+
+    Pero la proporción se elige para NO perder lo ya medido en esta
+    máquina (12 hilos), donde indexar con CLIP da:
+
+        6 hilos  33 ms      10 hilos  37 ms
+        8 hilos  31 ms      12 hilos  51 ms
+
+    Con `hilos // 4` salían 3 y se tiraba a la basura ese 31 ms. Con
+    tres cuartos redondeando a la baja salen 9 → recortado a 8, que es
+    justo el óptimo medido. En un portátil de 4 hilos da 3, que deja
+    uno libre para la voz y Windows.
+
+    MEDIDO sólo el tope de 8 en el Ryzen 5600G; el resto de la curva es
+    ESTIMADO por proporción y está sin comprobar en otras máquinas.
+    """
+    return max(1, min(8, (hilos * 3) // 4))
+
+
+@dataclass(frozen=True)
+class Estado:
+    cpu: float | None = 0.0
+    ram: float | None = 0.0
+    vram: float | None = None
+    juego: str = ""
+    medido: float = 0.0
+    umbrales: Umbrales = field(default_factory=Umbrales)
+    ram_disponible: int | None = None
+    perfil: PerfilHardware | None = None
+    residencia: float | None = None
+    modelo_cargado: bool | None = None
+
+    @property
+    def hay_juego(self) -> bool:
+        return bool(self.juego)
+
+    def modo(self) -> str:
+        u = self.umbrales
+        ram_a = (self.ram_disponible <= u.libre_apretado
+                 if self.ram_disponible is not None and u.libre_apretado
+                 else self.ram is not None and self.ram >= u.ram_apretado)
+        ram_j = (self.ram_disponible <= u.libre_justo
+                 if self.ram_disponible is not None and u.libre_justo
+                 else self.ram is not None and self.ram >= u.ram_justo)
+        if (self.hay_juego or ram_a
+                or (self.cpu is not None and self.cpu >= u.cpu_apretado)
+                or (self.vram is not None and self.vram >= u.vram_apretado)):
+            return "apretado"
+        if (ram_j or self.cpu is None or self.ram is None
+                or self.cpu >= u.cpu_justo
+                or (self.vram is not None and self.vram >= u.vram_justo)):
+            return "justo"
+        return "holgado"
+
+    def en_una_frase(self) -> str:
+        modos = {"holgado": "Hay margen de recursos.",
+                 "justo": "El PC está algo cargado, voy con cuidado.",
+                 "apretado": "El PC está al límite, dejo lo pesado para luego."}
+        partes = [modos[self.modo()]]
+        if self.juego:
+            partes.append(f"Tienes {self.juego} a pantalla completa.")
+        partes.append(f"CPU al {self.cpu:.0f} por ciento." if self.cpu is not None
+                      else "No puedo medir la CPU.")
+        partes.append(f"Memoria al {self.ram:.0f} por ciento." if self.ram is not None
+                      else "No puedo medir la memoria.")
+        if self.vram is not None:
+            partes.append(f"La gráfica al {self.vram * 100:.0f} por ciento.")
+        elif self.perfil and self.perfil.gpus == ():
+            partes.append("No he detectado una gráfica de hardware.")
+        else:
+            partes.append("No sé cuánto espacio queda en la gráfica.")
+        if self.residencia == 0.0:
+            partes.append("El modelo está en la memoria del procesador; puede responder más despacio.")
+        elif self.modelo_cargado is False:
+            partes.append("El modelo está descargado; la próxima respuesta necesitará cargarlo.")
+        return " ".join(partes)
+
+
+def _vram() -> float | None:
+    """Ocupación global cuando el driver la publica, de cualquier marca."""
+    try:
+        dato = ocupacion_dxcore()
+        if dato is not None:
+            return dato
+        perfil = perfilar()
+        if perfil.gpus is not None and not any(g.marca == "NVIDIA" for g in perfil.gpus):
+            return None
+        salida = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=1.0, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        fracciones = []
+        for linea in salida.stdout.strip().splitlines():
+            usado, total = map(float, linea.split(","))
+            if total > 0 and math.isfinite(usado) and 0 <= usado <= total:
+                fracciones.append(usado / total)
+        return max(fracciones) if fracciones else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+_residencia_compartida = None
+
+
+def establecer_residencia(proveedor):
+    global _residencia_compartida
+    _residencia_compartida = proveedor
+
+
+class Vigilante:
+    def __init__(self, perfil: PerfilHardware | None = None, residencia=None) -> None:
+        self.perfil = perfil if perfil is not None else perfilar()
+        self.umbrales = calibrar(self.perfil)
+        self._residencia = residencia
+        self._ultimo = Estado(perfil=self.perfil, umbrales=self.umbrales)
+        self._primera = True
+        self._cerrojo = threading.RLock()
+        try:
+            import psutil
+            psutil.cpu_percent(interval=None)
+        except ImportError:
+            pass
+
+    def estado(self, forzar: bool = False) -> Estado:
+        with self._cerrojo:
+            ahora = time.monotonic()
+            if not forzar and not self._primera and ahora - self._ultimo.medido < CADUCIDAD_S:
+                return self._ultimo
+            cpu = ram = libre = None
+            try:
+                import psutil
+                cpu = psutil.cpu_percent(interval=0.15 if self._primera else None)
+                memoria = psutil.virtual_memory()
+                ram = memoria.percent
+                libre = getattr(memoria, "available", None)
+            except (ImportError, OSError):
+                log.debug("No pude medir CPU/RAM", exc_info=True)
+            self._primera = False
+            residencia, cargado = None, None
+            proveedor = self._residencia or _residencia_compartida
+            if proveedor:
+                lectura = proveedor()
+                residencia, cargado = lectura.fraccion, lectura.cargado
+            self._ultimo = Estado(cpu, ram, _vram(), _juego_delante(), time.monotonic(),
+                                  self.umbrales, libre, self.perfil, residencia, cargado)
+            return self._ultimo
+
+    def modo(self) -> str:
+        return self.estado().modo()
+
+    def hay_sitio_para_lo_pesado(self) -> bool:
+        return self.modo() != "apretado"
+
+    def hilos_para_lo_pesado(self) -> int:
+        h = presupuesto_hilos(self.perfil.hilos)
+        return {"holgado": h, "justo": max(1, h // 2), "apretado": 1}[self.modo()]
+
+
 _NO_SON_JUEGOS = frozenset({
     "explorer", "opera", "chrome", "firefox", "msedge", "brave",
     "code", "devenv", "pycharm64", "obs64", "vlc", "mpc-hc64",
@@ -65,64 +229,6 @@ _NO_SON_JUEGOS = frozenset({
     "WhatsApp", "Telegram", "Notion", "slack", "Teams", "olk", "OUTLOOK",
     "WindowsTerminal", "cmd", "powershell", "notepad", "Notepad",
 })
-
-
-@dataclass(frozen=True)
-class Estado:
-    cpu: float = 0.0            # porcentaje 0-100
-    ram: float = 0.0            # porcentaje 0-100
-    vram: float = 0.0           # fracción usada, 0-1
-    juego: str = ""             # proceso a pantalla completa, si lo hay
-    medido: float = 0.0         # cuándo, en time.monotonic()
-
-    @property
-    def hay_juego(self) -> bool:
-        return bool(self.juego)
-
-    def modo(self) -> str:
-        """holgado, justo o apretado."""
-        if (self.cpu >= CPU_APRETADO or self.ram >= RAM_APRETADO
-                or self.vram >= VRAM_APRETADO):
-            return "apretado"
-        # Un juego delante cuenta como apretado aunque los números den
-        # justo: los fotogramas son suyos, no de NOVA.
-        if self.hay_juego:
-            return "apretado"
-        if (self.cpu >= CPU_JUSTO or self.ram >= RAM_JUSTO
-                or self.vram >= VRAM_JUSTO):
-            return "justo"
-        return "holgado"
-
-    def en_una_frase(self) -> str:
-        """Para decirlo en alto cuando pregunten por qué va lenta."""
-        if self.hay_juego:
-            return (f"Tienes {self.juego} a pantalla completa, así que voy a lo "
-                    f"justo. CPU al {self.cpu:.0f} por ciento y la gráfica al "
-                    f"{self.vram * 100:.0f}.")
-        modos = {
-            "holgado": "Voy sobrada.",
-            "justo": "El PC está algo cargado, voy con cuidado.",
-            "apretado": "El PC está al límite, dejo lo pesado para luego.",
-        }
-        return (f"{modos[self.modo()]} CPU al {self.cpu:.0f} por ciento, "
-                f"memoria al {self.ram:.0f} y la gráfica al {self.vram * 100:.0f}.")
-
-
-def _vram() -> float:
-    """Fracción de VRAM ocupada. 0.0 si no hay NVIDIA o no se puede saber."""
-    try:
-        salida = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=4,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).stdout.strip().splitlines()[0]
-        usada, total = (float(x) for x in salida.split(","))
-        return usada / total if total else 0.0
-    except Exception:  # noqa: BLE001
-        # Sin NVIDIA, o nvidia-smi no está. No es un error: hay PCs sin
-        # gráfica dedicada y NOVA funciona igual.
-        return 0.0
 
 
 def _juego_delante() -> str:
@@ -162,69 +268,3 @@ def _juego_delante() -> str:
         return ""
 
 
-class Vigilante:
-    """Mide la máquina, con la respuesta guardada unos segundos."""
-
-    def __init__(self) -> None:
-        self._ultimo = Estado()
-        self._primera = True
-        try:
-            import psutil
-
-            # Cebar el contador: `cpu_percent(interval=None)` mide desde
-            # la llamada ANTERIOR, y sin una anterior devuelve 0.0.
-            psutil.cpu_percent(interval=None)
-        except Exception:  # noqa: BLE001
-            log.debug("psutil no disponible", exc_info=True)
-
-    def estado(self, forzar: bool = False) -> Estado:
-        ahora = time.monotonic()
-        if not forzar and ahora - self._ultimo.medido < CADUCIDAD_S:
-            return self._ultimo
-
-        cpu = ram = 0.0
-        try:
-            import psutil
-
-            # La PRIMERA vez se mide con una ventana corta de verdad.
-            # Cebar el contador y preguntar acto seguido daba 0.0, y NOVA
-            # llegó a decir "CPU al 0 por ciento" con un juego abierto y
-            # la máquina al 90. 150 ms de bloqueo, una sola vez.
-            #
-            # Después ya sin intervalo: no bloquea, y mide desde la
-            # llamada anterior, que con la caducidad de 3 s es justo la
-            # ventana que interesa.
-            cpu = psutil.cpu_percent(interval=0.15 if self._primera else None)
-            self._primera = False
-            ram = psutil.virtual_memory().percent
-        except Exception:  # noqa: BLE001
-            log.debug("no pude medir CPU/RAM", exc_info=True)
-
-        self._ultimo = Estado(cpu=cpu, ram=ram, vram=_vram(),
-                              juego=_juego_delante(), medido=ahora)
-        return self._ultimo
-
-    def modo(self) -> str:
-        return self.estado().modo()
-
-    def hay_sitio_para_lo_pesado(self) -> bool:
-        """¿Se puede poner a indexar imágenes ahora mismo?"""
-        return self.modo() != "apretado"
-
-    def hilos_para_lo_pesado(self) -> int:
-        """Cuántos hilos usar en una tarea de fondo, según cómo esté todo.
-
-        Nunca todos: dejar cuatro núcleos libres no es un sacrificio.
-        Medido en este PC (12 hilos), por imagen con CLIP —
-
-            6 hilos  33 ms      10 hilos  37 ms
-            8 hilos  31 ms      12 hilos  51 ms
-
-        — con ocho va MÁS rápido que con doce, y además NOVA puede seguir
-        hablando mientras indexa.
-        """
-        nucleos = os.cpu_count() or 4
-        holgado = max(2, nucleos - 4)
-        return {"holgado": holgado,
-                "justo": max(2, holgado // 2),
-                "apretado": 1}[self.modo()]

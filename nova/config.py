@@ -1,20 +1,25 @@
-"""Configuración de NOVA — un solo sitio, valores ya afinados.
+"""Configuración de NOVA con procedencia de cada política.
 
-Cada default que lleva comentario está medido en la máquina real, no
-copiado de un tutorial.  Si algo va lento o raro, es aquí donde se mira
-primero.
+Las mediciones históricas corresponden al PC original. Los presupuestos
+nuevos se marcan ESTIMADOS: el inventario no sustituye un benchmark local.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent)
 load_dotenv(ROOT / ".env")
+# El .exe puede vivir en una carpeta no escribible. Los datos son del usuario;
+# desde fuentes se conserva data/ui.json en la ubicación del proyecto.
+DATOS = (Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "NOVA5" / "data"
+         if getattr(sys, "frozen", False) else ROOT / "data")
 
 
 def _env(key: str, default: str) -> str:
@@ -67,7 +72,6 @@ def _find_wake_model() -> Path:
         ROOT / "models" / "vosk-small",
         ROOT.parent / "NOVA3.0-2027" / "data" / "models" / "vosk" / "vosk-model-small-es-0.42",
         ROOT.parent / "NOVA" / "vosk-model-small-es-0.42",
-        ROOT / "models" / "vosk",
     ])
 
 
@@ -89,6 +93,15 @@ def _find_vosk_model() -> Path:
 
 @dataclass(frozen=True)
 class Config:
+    # ESTIMADO: 1.5B cuantizado y small/int8 limitan la huella en equipos de 8 GiB.
+    # No hay benchmarks nuevos: medir calidad de herramientas y latencia en ese PC.
+    model_cpu: str = field(default_factory=lambda: _env("NOVA_MODEL_CPU", "qwen2.5:1.5b"))
+    whisper_cpu: str = field(default_factory=lambda: _env("NOVA_WHISPER_CPU", "small"))
+    # ESTIMADO: conservar STT dos minutos abarata activaciones cercanas. Bajo
+    # presión se libera antes; mantenerlo no promete CPU cero ni 58 MB de RAM.
+    reposo_stt_s: float = field(default_factory=lambda: max(0, float(_env("NOVA_REPOSO_STT_S", "120"))))
+    # Experimental, apagado hasta comparar recall/falsas alarmas con bench_wake.
+    vad_wake: bool = field(default_factory=lambda: _env_bool("NOVA_VAD_WAKE", False))
     # ── Modelo de lenguaje (Ollama, local y gratis) ──────────────────
     #
     # 127.0.0.1 y NUNCA "localhost": en Windows el resolver de Python
@@ -106,8 +119,9 @@ class Config:
     # (medido: 7-60 s según cuánto tarde el disco/antivirus en leer ~2 GB
     # la primera vez) frente a ~0.6 s ya cargado. Con un PC que no anda
     # sobrado, ese coste se paga UNA vez al día, no varias veces por hora.
-    # 24h de VRAM ociosa (~2 GB de una tarjeta de 12 GB) sale gratis.
-    keep_alive: str = field(default_factory=lambda: _env("NOVA_KEEP_ALIVE", "24h"))
+    # ESTIMADO nuevo: 2m limita reservas abandonadas si NOVA cae o falla la
+    # descarga al dormir. La máquina de estados descarga antes cuando puede.
+    keep_alive: str = field(default_factory=lambda: _env("NOVA_KEEP_ALIVE", "2m"))
     # Modelo de repuesto para cuando un juego se queda con la VRAM.
     #
     # No es una corazonada: medido el 27/08 con Star Citizen abierto
@@ -154,7 +168,7 @@ class Config:
         default_factory=lambda: _env("NOVA_REMOTO_MODEL", "openai/gpt-oss-120b")
     )
     remoto_key: str = field(default_factory=lambda: _env("NOVA_GROQ_KEY", ""))
-    remoto_key_file: Path = ROOT / "data" / "groq.key"
+    remoto_key_file: Path = DATOS / "groq.key"
     # Cambiar solo a la nube cuando haya un juego delante. Apagado a
     # propósito: mandar tus datos fuera no puede ser un efecto
     # secundario de abrir un juego.
@@ -299,11 +313,11 @@ class Config:
 
     # ── Rutas ────────────────────────────────────────────────────────
     root: Path = ROOT
-    data_dir: Path = ROOT / "data"
-    workspace: Path = ROOT / "workspace"
-    log_file: Path = ROOT / "data" / "nova.log"
-    memory_file: Path = ROOT / "data" / "memory.json"
-    screenshots: Path = ROOT / "data" / "screenshots"
+    data_dir: Path = DATOS
+    workspace: Path = DATOS.parent / "workspace"
+    log_file: Path = DATOS / "nova.log"
+    memory_file: Path = DATOS / "memory.json"
+    screenshots: Path = DATOS / "screenshots"
 
     # La carpeta donde vive todo lo que Benja programa. Es la ÚNICA que
     # las herramientas de código pueden mirar y en la que pueden
