@@ -145,7 +145,7 @@ class Config:
     # Sin clave no existe: NOVA no lo mira nunca y todo va como siempre.
     # Con clave sigue haciendo falta pedirlo ("modo rápido"), porque
     # encenderlo significa que lo que dices sale del PC — y eso lo
-    # decide Benja, no un umbral de VRAM. Ver `nova/llm/remoto.py`.
+    # decide Benjahmlp22, no un umbral de VRAM. Ver `nova/llm/remoto.py`.
     remoto_url: str = field(
         default_factory=lambda: _env("NOVA_REMOTO_URL", "https://api.groq.com/openai/v1")
     )
@@ -175,7 +175,7 @@ class Config:
     remoto_auto: bool = field(default_factory=lambda: _env_bool("NOVA_REMOTO_AUTO", False))
     # Arrancar YA en modo rápido, sin tener que pedirlo cada sesión.
     # En el código va a false: quien clone esto no ha dado permiso para
-    # que sus datos salgan. En el .env de Benja va a true, que es lo que
+    # que sus datos salgan. En el .env de Benjahmlp22 va a true, que es lo que
     # pidió el 02/09.
     remoto_siempre: bool = field(
         default_factory=lambda: _env_bool("NOVA_REMOTO_SIEMPRE", False)
@@ -256,7 +256,7 @@ class Config:
     # Cuánto se le puede seguir hablando sin repetir el nombre después de
     # que ella conteste.
     #
-    # Estaba en 8 s, que es el hueco de UN turno, y la queja de Benja el
+    # Estaba en 8 s, que es el hueco de UN turno, y la queja de Benjahmlp22 el
     # 01/09 fue justo ésa: «que no se calle la conversación, que me deje
     # seguir a menos que le diga adiós». Ocho segundos son los que tardas
     # en pensar la siguiente frase, así que a la segunda ya tenías que
@@ -319,7 +319,7 @@ class Config:
     memory_file: Path = DATOS / "memory.json"
     screenshots: Path = DATOS / "screenshots"
 
-    # La carpeta donde vive todo lo que Benja programa. Es la ÚNICA que
+    # La carpeta donde vive todo lo que Benjahmlp22 programa. Es la ÚNICA que
     # las herramientas de código pueden mirar y en la que pueden
     # ejecutar: dejar que un modelo de 4B elija ruta a partir de lo que
     # ha entendido por un micrófono no es una opción.
@@ -333,7 +333,7 @@ class Config:
     # Sale de un fallo en vivo el 02/09: pedido "en el escritorio", el
     # modelo llamó a `folder.create`, que escribe dentro de
     # `nova/workspace/` — creó `workspace/Escritorio/FlappyGame`, una
-    # carpeta que Benja jamás iba a ver porque vive dentro del propio
+    # carpeta que Benjahmlp22 jamás iba a ver porque vive dentro del propio
     # proyecto de NOVA, no en su Windows. Con `codigo.escribir(...,
     # escritorio=True)` el nuevo proyecto se crea aquí directamente.
     escritorio_dir: Path = field(

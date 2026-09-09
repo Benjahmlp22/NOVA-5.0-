@@ -21,7 +21,7 @@ El coste que hay en juego, medido el 26/08:
     vosk-model-es-0.42        2.3 GB   carga 47.2 s
     vosk-model-small-es-0.42   58 MB   carga  0.4 s
 
-48x. Pero Benja ya cambió del pequeño al grande porque el pequeño no
+48x. Pero Benjahmlp22 ya cambió del pequeño al grande porque el pequeño no
 detectaba bien, así que no se vuelve al pequeño sin números — de ahí
 este banco.
 

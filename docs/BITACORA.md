@@ -433,7 +433,7 @@ Heredadas de NOVA4 y confirmadas por todo lo de arriba:
 
    - sin clave en `data/groq.key` el módulo es inerte y no contacta con
      nadie;
-   - con clave sigue apagado hasta que Benja diga «modo rápido» en voz
+   - con clave sigue apagado hasta que Benjahmlp22 diga «modo rápido» en voz
      alta, cada sesión, y no se guarda en disco;
    - «modo local» gana por encima de cualquier configuración.
 

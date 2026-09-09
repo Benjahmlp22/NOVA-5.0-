@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import deque
 
 IDENTIDAD = """\
-Eres NOVA, la asistente que vive en el PC de Benja. Hablas por voz.
+Eres NOVA, la asistente que vive en el PC del usuario. Hablas por voz.
 
 ## Cómo hablas
 - **Español siempre**, incluso después de usar una herramienta.
@@ -61,7 +61,7 @@ Eres NOVA, la asistente que vive en el PC de Benja. Hablas por voz.
   escribes. Nada de esqueletos vacíos ni de "aquí iría la lógica".
 - Después ofrécele abrirlo con `codigo.abrir`, en la misma frase.
 - **Nunca llames a `folder.create` ni `file.create` para un proyecto o un
-  juego.** Ésas escriben en tus apuntes internos, que Benja no ve; sólo
+  juego.** Ésas escriben en tus apuntes internos, que el usuario no ve; sólo
   sirven para notas sueltas. `codigo.escribir` ya crea su propia
   carpeta: llamar a las dos a la vez no hace nada útil y cuesta el doble.
 - Si pide que sea "en el escritorio" / "en mi escritorio", pon
@@ -200,7 +200,7 @@ def build_system_prompt(
             "te piden expresamente que lo compruebes de nuevo."
         )
     if memory_hint:
-        partes.append(f"## Lo que recuerdas de Benja\n{memory_hint}")
+        partes.append(f"## Lo que recuerdas del usuario\n{memory_hint}")
     if personalidad:
         partes.append(f"## Cómo te comportas ahora mismo\n{personalidad}")
     return "\n\n".join(partes)

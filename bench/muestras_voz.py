@@ -19,7 +19,7 @@ from nova.voice.onecore import SintetizadorOneCore  # noqa: E402
 from nova.voice.speaker import Speaker  # noqa: E402
 
 FRASE = (
-    "Hola Benja. Te he bajado el volumen de Spotify y he apuntado "
+    "Hola. Te he bajado el volumen de la música y he apuntado "
     "lo de la cena. ¿Quieres que te avise en media hora?"
 )
 

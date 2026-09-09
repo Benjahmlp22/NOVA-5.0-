@@ -26,3 +26,8 @@ muestras_voz/
 # Modelos de CLIP para buscar imagenes por su contenido (607 MB).
 # Se bajan con bench/descargar_clip.py.
 models/clip/
+
+# Configuración de herramientas de edición locales.
+.claude/
+.cursor/
+.vscode/

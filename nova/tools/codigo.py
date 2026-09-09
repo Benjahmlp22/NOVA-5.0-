@@ -1,7 +1,7 @@
 """Mirar, ejecutar y probar código: NOVA como compañera de programación.
 
 Hasta ahora NOVA sabía abrir apps y leer carpetas, pero de los proyectos
-de Benja no sabía nada. «Prueba Nodika» o «¿por qué falla el script?» no
+de Benjahmlp22 no sabía nada. «Prueba Nodika» o «¿por qué falla el script?» no
 tenían respuesta posible: no podía abrir un archivo, ni correr un test,
 ni ver un error.
 
@@ -15,7 +15,7 @@ es exactamente el tipo de cosa que no debe poder pasar.
 
 El Escritorio entró el 02/09 y sólo porque hacía falta: pedido "hazme un
 juego en el escritorio", NOVA escribía dentro de `nova/workspace/` —una
-carpeta interna suya— y Benja no encontraba nada.  Se comprueba con la
+carpeta interna suya— y Benjahmlp22 no encontraba nada.  Se comprueba con la
 ruta ya resuelta (`_dentro_conocido`), así que `..` no lleva a ninguna
 parte.
 
@@ -98,7 +98,7 @@ def _normalizar(texto: str) -> str:
 def proyectos() -> dict[str, Path]:
     """Las carpetas bajo la raíz que parecen un proyecto, por nombre.
 
-    Se recorre cada vez y no se cachea a propósito: Benja crea proyectos
+    Se recorre cada vez y no se cachea a propósito: Benjahmlp22 crea proyectos
     a diario, y una caché haría que el de esta mañana no existiera para
     NOVA hasta reiniciarla. Medido: 182 proyectos en 0.36 s, saltándose
     `node_modules` — cachear eso sería optimizar lo que no duele.
@@ -131,7 +131,7 @@ def proyectos() -> dict[str, Path]:
 
 
 def _resolver(nombre: str, estricto: bool = False) -> Path | None:
-    """La carpeta que Benja quiere decir. Tolerante: lo dijo hablando.
+    """La carpeta que Benjahmlp22 quiere decir. Tolerante: lo dijo hablando.
 
     `estricto` quita la mitad peligrosa de la tolerancia, y hace falta.
     Probándolo en vivo, «hazme un juego en un proyecto que se llame
@@ -176,7 +176,7 @@ def _en_escritorio(clave: str, *, estricto: bool = False) -> dict[str, Path]:
     """Carpetas del Escritorio real cuyo nombre encaja, sin indexar nada.
 
     A propósito NO se mete en `proyectos()`: lo que hay en el Escritorio
-    de Benja es suyo, no un catálogo de NOVA, y `codigo.proyectos` no
+    de Benjahmlp22 es suyo, no un catálogo de NOVA, y `codigo.proyectos` no
     tiene por qué listar sus accesos directos y sus otras carpetas.
     """
     try:
@@ -411,7 +411,7 @@ def escribir(proyecto: str, archivo: str, contenido: str,
     `escritorio=True` lo crea en el Escritorio DE VERDAD y no dentro de
     `proyectos/`. Existe porque probado en vivo el modelo, ante "en el
     escritorio", llamaba a `folder.create` —que escribe en
-    `nova/workspace/`, invisible para Benja— y encima eso obligaba a una
+    `nova/workspace/`, invisible para Benjahmlp22— y encima eso obligaba a una
     SEGUNDA vuelta a la API para redactar la respuesta, que es lo que se
     comió el resto del presupuesto de tokens de la nube.
 
@@ -447,7 +447,7 @@ def escribir(proyecto: str, archivo: str, contenido: str,
         raiz = CONFIG.proyectos_dir
         creado_ahora = False
         if carpeta is None:
-            # Proyecto nuevo. Se crea en la raíz, que es donde Benja ya
+            # Proyecto nuevo. Se crea en la raíz, que es donde Benjahmlp22 ya
             # tiene varios sueltos; meterlo en una de sus carpetas
             # numeradas sería adivinar en cuál.
             limpio = re.sub(r"[^\w\- ]+", "", proyecto or "").strip()
@@ -516,7 +516,7 @@ def editar(proyecto: str, archivo: str, buscar_texto: str,
     `escribir`, un "cámbiale el color a la serpiente" obliga a regenerar
     las 120 líneas enteras de memoria: se tarda veinte segundos, se
     gastan dos mil tokens y se pierde por el camino cualquier cosa que
-    hubiera tocado Benja a mano.
+    hubiera tocado Benjahmlp22 a mano.
 
     El trozo tiene que aparecer **una sola vez**. Si sale varias, no se
     toca nada y se dice cuántas: reemplazar la primera de cinco
@@ -573,7 +573,7 @@ def editar(proyecto: str, archivo: str, buscar_texto: str,
 # ── Ejecutar ─────────────────────────────────────────────────────────
 
 def _hay_sitio(igualmente: bool) -> ToolResult | None:
-    """El vigilante manda, salvo que Benja insista.
+    """El vigilante manda, salvo que Benjahmlp22 insista.
 
     Devuelve el "no" ya redactado, o None si se puede seguir. Vive suelto
     porque lo usan `ejecutar` y `probar` igual, y porque así se puede
@@ -890,7 +890,7 @@ def _resumir_tests(salida: str) -> str:
 # ── Registro ─────────────────────────────────────────────────────────
 
 def _resumir_ejecutar(args: dict) -> str:
-    """Lo que Benja oye antes de decir que sí. Tiene que ser exacto."""
+    """Lo que Benjahmlp22 oye antes de decir que sí. Tiene que ser exacto."""
     que = args.get("comando") or args.get("archivo") or ""
     proyecto = args.get("proyecto", "ese proyecto")
     return f"ejecutar «{que}» en {proyecto}" if que else f"ejecutar algo en {proyecto}"

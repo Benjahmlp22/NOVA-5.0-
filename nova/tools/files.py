@@ -121,7 +121,7 @@ def register(reg) -> None:  # noqa: ANN001
         description=(
             "Crea un archivo de texto en los APUNTES internos de NOVA. NO es el "
             "Escritorio real ni se ve fuera de aquí — para código, juegos o "
-            "cualquier cosa que Benja tenga que ENCONTRAR, usa codigo.escribir"
+            "cualquier cosa que Benjahmlp22 tenga que ENCONTRAR, usa codigo.escribir"
         ),
         handler=create_file,
         schema={
@@ -138,7 +138,7 @@ def register(reg) -> None:  # noqa: ANN001
         name="folder.create",
         description=(
             "Crea una carpeta en los APUNTES internos de NOVA. NO es el Escritorio "
-            "real: Benja no la ve. Para un proyecto o un juego usa SOLO "
+            "real: Benjahmlp22 no la ve. Para un proyecto o un juego usa SOLO "
             "codigo.escribir, que ya crea su propia carpeta — llamar a ésta a la "
             "vez es tiempo y tokens tirados"
         ),

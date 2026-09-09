@@ -2,7 +2,7 @@
 
 Lo primero que se comprueba es que NO se enciende solo. Todo lo demás de
 este módulo es una comodidad; eso es una promesa sobre los datos de
-Benja.
+Benjahmlp22.
 """
 
 from __future__ import annotations
@@ -210,7 +210,7 @@ def test_ante_una_espera_corta_repite(monkeypatch):
 
 def test_ante_una_cuota_de_verdad_se_rinde(monkeypatch):
     """Si pide esperar mucho, es una cuota real: mejor el modelo de casa
-    que dejar a Benja mirando el orbe."""
+    que dejar a Benjahmlp22 mirando el orbe."""
     from nova.llm.remoto import ClienteRemoto
 
     dormido = []

@@ -2,7 +2,7 @@
 
 Lo que se comprueba aquí es sobre todo lo que NO debe pasar: salirse de
 la carpeta de proyectos, colgarse esperando a un script que no termina, y
-ponerse a compilar mientras Benja está jugando.
+ponerse a compilar mientras Benjahmlp22 está jugando.
 """
 
 from __future__ import annotations
@@ -371,7 +371,7 @@ def test_lo_que_si_encaja_sigue_encajando_al_escribir(proyectos):
 #
 # Con sólo `escribir`, un "cámbiale el color a la serpiente" obliga a
 # regenerar las 120 líneas de memoria: veinte segundos, dos mil tokens, y
-# se lleva por delante cualquier cosa que Benja hubiera tocado a mano.
+# se lleva por delante cualquier cosa que Benjahmlp22 hubiera tocado a mano.
 
 def test_editar_cambia_solo_lo_pedido(proyectos):
     js = proyectos / "09_Scripts" / "conversor" / "juego.js"
@@ -425,7 +425,7 @@ def test_editar_tampoco_se_sale_de_la_carpeta(proyectos):
 #
 # En directo, el 02/09: pedido "en el escritorio", el modelo llamaba a
 # `folder.create` -que escribe en nova/workspace/, invisible para
-# Benja- y encima eso forzaba una SEGUNDA vuelta a la API para redactar
+# Benjahmlp22- y encima eso forzaba una SEGUNDA vuelta a la API para redactar
 # la respuesta, que fue lo que agotó el resto del presupuesto de tokens
 # de la nube. Estos tests cubren la ruta que reemplaza a ese camino.
 
@@ -460,7 +460,7 @@ def test_lo_del_escritorio_tambien_se_puede_leer_y_abrir(proyectos):
 
 
 def test_el_escritorio_no_se_cuela_en_codigo_proyectos(proyectos):
-    """Lo del Escritorio de Benja es suyo, no un catálogo de NOVA."""
+    """Lo del Escritorio de Benjahmlp22 es suyo, no un catálogo de NOVA."""
     codigo.escribir("PongPrueba", "index.html", "<h1>pong</h1>", escritorio=True)
     todos = codigo.proyectos()
     assert "pongprueba" not in todos

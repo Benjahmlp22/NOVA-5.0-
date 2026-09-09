@@ -115,8 +115,8 @@ def test_memoria_guarda_y_recuerda(memoria_temporal):
 
 def test_memoria_no_duplica(memoria_temporal):
     mem = memoria_temporal
-    mem.remember("me llamo Benja")
-    segunda = mem.remember("me llamo Benja")
+    mem.remember("me llamo Ana")
+    segunda = mem.remember("me llamo Ana")
     assert "ya" in segunda.message.lower()
 
 
@@ -166,10 +166,10 @@ def test_el_catalogo_del_modelo_sale_de_expose_to_llm():
 def test_memoria_para_prompt_lista_los_hechos(memoria_temporal):
     from nova.tools import memory
 
-    memory.remember("me llamo Benja")
+    memory.remember("me llamo Ana")
     memory.remember("juego a Stormworks")
     bloque = memory.para_prompt()
-    assert "- me llamo Benja" in bloque
+    assert "- me llamo Ana" in bloque
     assert "- juego a Stormworks" in bloque
 
 

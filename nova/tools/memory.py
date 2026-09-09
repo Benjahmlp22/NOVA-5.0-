@@ -70,7 +70,7 @@ def remember(text: str) -> ToolResult:
     if not texto:
         return ToolResult(ok=False, message="¿Qué quieres que recuerde?")
     facts = _load()
-    # Evita duplicados exactos: repetir "me llamo Benja" 5 veces no
+    # Evita duplicados exactos: repetir "me llamo Ana" 5 veces no
     # mejora la memoria, solo ensucia el recall.
     if any(_norm(f["text"]) == _norm(texto) for f in facts):
         return ToolResult(ok=True, message="Eso ya lo tenía guardado.")

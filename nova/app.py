@@ -117,7 +117,7 @@ def elegir_cerebro(*, preferencia: str, hay_clave: bool,
                    siempre: bool = False) -> bool:
     """¿Toca pensar en la nube? Suelta para poder probarla sin montar Qt.
 
-    Manda lo que Benja haya pedido, en los dos sentidos: "modo rápido"
+    Manda lo que Benjahmlp22 haya pedido, en los dos sentidos: "modo rápido"
     enciende aunque el PC vaya sobrado, y "modo local" apaga aunque haya
     un juego delante comiéndose la VRAM.
 
@@ -619,7 +619,7 @@ class Nova(QObject):
         return self._modo_ligero
 
     def preferir_cerebro(self, cual: str) -> None:
-        """Lo que Benja ha pedido: "rapido", "local" o "" para que decida ella.
+        """Lo que Benjahmlp22 ha pedido: "rapido", "local" o "" para que decida ella.
 
         La llama una herramienta, o sea el HILO TRABAJADOR, y aplicar el
         cambio repinta el indicador del panel. Así que aquí sólo se emite
@@ -666,7 +666,7 @@ class Nova(QObject):
         fallaba igual, y el siguiente, repitiendo esa frase para siempre.
 
         Se apaga la preferencia además de la conexión: si vuelve a
-        encenderse solo, vuelve a fallar. Que lo pida Benja otra vez si
+        encenderse solo, vuelve a fallar. Que lo pida Benjahmlp22 otra vez si
         quiere reintentarlo.
         """
         if not self._en_remoto:

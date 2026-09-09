@@ -1,6 +1,6 @@
 """Que NOVA no vuelva a buscar lo que ya buscó.
 
-Todo este módulo sale de una queja de Benja del 01/09: «le dije búscame
+Todo este módulo sale de una queja de Benjahmlp22 del 01/09: «le dije búscame
 quién ganó el mundial y al volverle a hablar lo buscó otra vez». Se
 atacó por dos sitios a la vez, y aquí se prueban los dos: los apuntes,
 que hacen que el modelo SEPA que ya lo miró, y la caché, que hace que si

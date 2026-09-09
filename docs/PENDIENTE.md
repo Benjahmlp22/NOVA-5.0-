@@ -82,7 +82,7 @@ herramienta empieza a devolver mucho texto (`web.search`,
 ### La clave, y cómo está puesta hoy
 
 Vive en `data/groq.key` (fuera del repositorio) y está probada contra la
-API de verdad. `NOVA_REMOTO_SIEMPRE=true` en el `.env` de Benja: arranca
+API de verdad. `NOVA_REMOTO_SIEMPRE=true` en el `.env` de Benjahmlp22: arranca
 YA en modo rápido, sin pedirlo cada sesión — decisión suya del 02/09.
 Decir «modo local» sigue ganando sobre eso.
 
@@ -109,7 +109,7 @@ de verdad y con un juego abierto. Lo verificado en vivo:
 
 - `organizar.hacerlo` contra los 627 archivos reales de Descargas (sólo
   se ha probado en seco y con carpetas de mentira). Es lo que más
-  incertidumbre queda: mueve archivos de Benja.
+  incertidumbre queda: mueve archivos de Benjahmlp22.
 - la búsqueda de imágenes con una consulta que importe,
 - los botones de mudo y sordo.
 

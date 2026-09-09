@@ -12,7 +12,7 @@ querer, el mismo problema.
 nunca.  Con clave, quién manda es la configuración: por defecto hay que
 pedirlo («modo rápido») porque encenderlo significa que lo que dices sale
 de tu ordenador, y con `NOVA_REMOTO_SIEMPRE=true` arranca ya encendido —
-que es como lo quiso Benja el 02/09.  Decir «modo local» gana siempre.
+que es como lo quiso Benjahmlp22 el 02/09.  Decir «modo local» gana siempre.
 
 La clave se lee de `NOVA_GROQ_KEY` o de `data/groq.key`, que está fuera
 del repositorio.  Nunca se escribe en el log.
@@ -237,7 +237,7 @@ class ClienteRemoto:
 
     # Cuánto se está dispuesto a esperar a que se reponga la cuota. Por
     # encima de esto, mejor contestar con el modelo de casa que dejar a
-    # Benja mirando el orbe.
+    # Benjahmlp22 mirando el orbe.
     ESPERA_MAXIMA_S = 4.0
 
     def _esperar_y_reintentar(self, resp: httpx.Response) -> bool:
@@ -372,7 +372,7 @@ def elegir_herramientas(
     Esto no se le hace al modelo local: Ollama no cobra por token y allí
     el catálogo entero sólo cuesta un poco de prefill.
 
-    Se puntúa por palabras compartidas con lo que ha dicho Benja, y ante
+    Se puntúa por palabras compartidas con lo que ha dicho Benjahmlp22, y ante
     el empate manda el orden del registro. Si aun así falta la que hacía
     falta, el agente recibe "no existe esa herramienta" y lo reintenta,
     que es un camino que ya existía.

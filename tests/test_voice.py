@@ -19,7 +19,7 @@ from nova.voice.wake import normalizar_texto
 # ── Texto que se manda al TTS ────────────────────────────────────────
 
 def test_limpiar_para_voz_quita_lo_que_se_lee_mal():
-    sucio = "**Listo**: mira `C:\\Users\\Benja\\cosas` o https://ejemplo.com/x"
+    sucio = "**Listo**: mira `C:\\Users\\Benjahmlp22\\cosas` o https://ejemplo.com/x"
     limpio = limpiar_para_voz(sucio)
     assert "**" not in limpio
     assert "C:\\" not in limpio

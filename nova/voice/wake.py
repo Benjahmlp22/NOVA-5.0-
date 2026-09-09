@@ -46,7 +46,7 @@ log = logging.getLogger("nova.voice.wake")
 # qué es", y un "noo" se le parece más al nombre que a la nada.
 #
 # Y no vale meter cualquier señuelo: probado el 26/08 sobre 14 frases de
-# Benja, con señuelos del tipo "no va" o "la novia" el recall se hundía
+# Benjahmlp22, con señuelos del tipo "no va" o "la novia" el recall se hundía
 # de 8/8 a 4/8 — esos SÍ son los mismos fonemas que el nombre. "no" y
 # "noo" se diferencian del nombre en una sílaba entera, que Vosk sí oye:
 #

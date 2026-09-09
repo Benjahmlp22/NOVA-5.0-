@@ -8,7 +8,7 @@ un permiso que nadie recuerda haber dado.
 
 Sin clave configurada las tres herramientas siguen existiendo, pero
 dicen que no hay nada que encender y cómo conseguirlo.  Es mejor que
-esconderlas: si no aparecen, NOVA contesta "no puedo hacer eso" y Benja
+esconderlas: si no aparecen, NOVA contesta "no puedo hacer eso" y Benjahmlp22
 no se entera de que la opción existe.
 """
 

@@ -69,7 +69,7 @@ def test_permiso_denegado_no_se_guarda_como_exito(tmp_path, monkeypatch):
 def test_comando_con_espacios_python_y_exe(tmp_path, empaquetado):
     # Carpeta propia y CORTA, no `tmp_path` a secas: la ruta que pytest
     # reparte depende de dónde se corra, y desde una carpeta ya larga
-    # (la de Benja lo es) el comando pasaba de 260 caracteres y saltaba
+    # (la de Benjahmlp22 lo es) el comando pasaba de 260 caracteres y saltaba
     # el guardián de `comando_inicio`. Lo que se prueba aquí son las
     # comillas, no el límite de longitud — ese tiene su propio test.
     proyecto = Path(tempfile.mkdtemp(prefix="nv ")) / "NOVA con espacios"

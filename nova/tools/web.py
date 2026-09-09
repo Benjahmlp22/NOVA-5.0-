@@ -55,7 +55,7 @@ MAX_CARACTERES = 220
 # que parezca que se acuerda.
 #
 # Quince minutos: lo justo para una conversación entera. Un precio o un
-# resultado no cambian en ese rato, y si de verdad cambian, Benja puede
+# resultado no cambian en ese rato, y si de verdad cambian, Benjahmlp22 puede
 # decir "compruébalo otra vez" — eso llega con `refrescar`.
 CACHE_S = 15 * 60
 _cache: dict[str, tuple[float, str]] = {}
